@@ -199,7 +199,7 @@ void eventloop()
         int r = epoll_wait(epollfd, events.ptr, MAX_EVENTS, TIMEOUT);
         if (r < 0) {
             // TODO handle error
-            _exit(r);
+            _exit(r); //quick and dirty for now
         }
         // 2. move waiters ---> queue
         for (int n = 0; n < r; n++) {
@@ -209,10 +209,9 @@ void eventloop()
             foreach(a; w) {
                 // 3. the tick is read and write are separate, and then there are TODO: exceptions (errors)
                 if ((a.op & events[fd].events) != 0) {
-                    //mtx.lock();
-                    //Fiber f = a.fiber;
+                    mtx.lock();
                     (cast(DList!Fiber)queue).insertBack(cast(Fiber)(a.fiber));
-                    //mtx.unlock();
+                    mtx.unlock();
                 }
             }
         }

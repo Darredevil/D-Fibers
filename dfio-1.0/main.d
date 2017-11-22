@@ -22,6 +22,8 @@ import dfio : runUntilCompletion;
 
 void main()
 {
+    read(0,null,0uL); //test hook works
+
     auto t1 = new Thread(() {
        //...
        runUntilCompletion();
