@@ -8,81 +8,85 @@ import std.stdio;
 interface WorkQueue(T) {
     shared void push(T item);
     shared T pop(); // blocks if empty
-    shared bool tryPop(ref T item); // non-blocking, maybe not the best signature
+    shared bool tryPop(ref T item); // non-blocking
+}
+
+ref T unshared(T)(ref shared T value) {
+     return *cast(T*)&value;
 }
 
 synchronized class BlockingQueue(T) : WorkQueue!T {
-    //private shared Mutex m;
-    private shared Condition cond;
+    private Condition cond;
     private DList!T queue;
 
     this() {
-        //m = new shared Mutex;
         cond = cast(shared)(new Condition(new Mutex));
-        //(cast(DList!T)queue) = new DList!T;
     }
-
-    shared Condition getCond() {
-        return (cast(Condition)cond);
-    }
-
-    //alias cond = (cast(Condition)condition);
-    //alias queue = (cast(DList!T)queue);
 
     shared void push(T item) {
-        (cast(DList!T)queue).insertBack(item);
-        (cast(Condition)cond).notify();
+        queue.unshared.insertBack(item);
+        cond.unshared.notify();
     }
 
     shared T pop() {
-        while((cast(DList!T)queue).empty())
-            (cast(Condition)cond).wait();
-        T tmp = (cast(DList!T)queue).front;
-        (cast(DList!T)queue).removeFront();
+        while(queue.unshared.empty())
+            cond.unshared.wait();
+        T tmp = queue.unshared.front;
+        queue.unshared.removeFront();
         return tmp;
     }
 
     shared @property bool empty() {
-        return (cast(DList!T)queue).empty();
+        return queue.unshared.empty();
     }
 
     shared @property T front() {
-        return (cast(DList!T)queue).front;
+        return queue.unshared.front;
     }
 
     shared bool tryPop(ref T item) {
-        if ((cast(DList!T)queue).empty)
+        if (queue.unshared.empty)
             return false;
 
-        item = (cast(DList!T)queue).front;
-        (cast(DList!T)queue).removeFront();
+        item = queue.unshared.front;
+        queue.unshared.removeFront();
         return true;
     }
 
     shared void waitAndPop(ref T item) {
-        while ((cast(DList!T)queue).empty())
-            (cast(Condition)cond).wait();
+        while (queue.unshared.empty())
+            cond.unshared.wait();
 
-        item = (cast(DList!T)queue).front;
-        (cast(DList!T)queue).removeFront();
+        item = queue.unshared.front;
+        queue.unshared.removeFront();
     }
 
-    //unittest
-    //{
-    //    BlockingQueue!int bq = new BlockingQueue!int;
-    //    bq.push(3);
-    //    assert(bq.front == 2);
-
-    //}
+    unittest
+    {
+        shared BlockingQueue!int bq = new shared BlockingQueue!int;
+        assert(bq.empty == true);
+        bq.push(3);
+        assert(bq.front == 3);
+        assert(bq.empty == false);
+        bq.push(2);
+        bq.push(1);
+        bq.push(0);
+        bq.push(-5);
+        assert(bq.front == 3);
+        int i;
+        assert(bq.tryPop(i) == true);
+        assert(i == 3);
+        while(!bq.empty)
+            bq.pop();
+        assert(bq.empty == true);
+    }
 }
 
 void main()
 {
     shared BlockingQueue!int bq = new shared BlockingQueue!int;
     writeln(&bq);
-    writeln(bq.getCond());
-    //writeln(bq);
+    writeln(&bq.cond.unshared);
     bq.push(3);
     assert(bq.front == 3);
-
 }
