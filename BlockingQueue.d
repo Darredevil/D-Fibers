@@ -15,20 +15,24 @@ ref T unshared(T)(ref shared T value) {
      return *cast(T*)&value;
 }
 
-synchronized class BlockingQueue(T) : WorkQueue!T {
-    private Condition cond;
-    private DList!T queue;
+shared class BlockingQueue(T) : WorkQueue!T {
+    private shared Condition cond;
+    private shared DList!T queue;
 
-    this() {
+     this() {
         cond = cast(shared)(new Condition(new Mutex));
     }
 
-    shared void push(T item) {
+    void push(T item) {
+        cond.unshared.mutex.lock();
+        scope(exit) cond.unshared.mutex.unlock();
         queue.unshared.insertBack(item);
         cond.unshared.notify();
     }
 
-    shared T pop() {
+    T pop() {
+        cond.unshared.mutex.lock();
+        scope(exit) cond.unshared.mutex.unlock();
         while(queue.unshared.empty())
             cond.unshared.wait();
         T tmp = queue.unshared.front;
@@ -36,57 +40,62 @@ synchronized class BlockingQueue(T) : WorkQueue!T {
         return tmp;
     }
 
-    shared @property bool empty() {
-        return queue.unshared.empty();
-    }
-
-    shared @property T front() {
-        return queue.unshared.front;
-    }
-
-    shared bool tryPop(ref T item) {
-        if (queue.unshared.empty)
+    bool tryPop(ref T item) {
+        cond.unshared.mutex.lock();
+        scope(exit) cond.unshared.mutex.unlock();
+        if (queue.unshared.empty) {
+            
             return false;
-
+        }
         item = queue.unshared.front;
         queue.unshared.removeFront();
         return true;
     }
 
-    shared void waitAndPop(ref T item) {
-        while (queue.unshared.empty())
-            cond.unshared.wait();
-
-        item = queue.unshared.front;
-        queue.unshared.removeFront();
-    }
-
-    unittest
-    {
-        shared BlockingQueue!int bq = new shared BlockingQueue!int;
-        assert(bq.empty == true);
-        bq.push(3);
-        assert(bq.front == 3);
-        assert(bq.empty == false);
-        bq.push(2);
-        bq.push(1);
-        bq.push(0);
-        bq.push(-5);
-        assert(bq.front == 3);
-        int i;
-        assert(bq.tryPop(i) == true);
-        assert(i == 3);
-        while(!bq.empty)
-            bq.pop();
-        assert(bq.empty == true);
+    @property bool empty() {
+        cond.unshared.mutex.lock();
+        scope(exit) cond.unshared.mutex.unlock();
+        return queue.unshared.empty;
     }
 }
 
-void main()
+unittest
 {
     shared BlockingQueue!int bq = new shared BlockingQueue!int;
-    writeln(&bq);
-    writeln(&bq.cond.unshared);
+    assert(bq.empty == true);
     bq.push(3);
-    assert(bq.front == 3);
+    assert(bq.pop == 3);
+    bq.push(2);
+    bq.push(1);
+    bq.push(0);
+    bq.push(-5);
+    assert(bq.pop == 2);
+    int i;
+    assert(bq.tryPop(i) == true);
+    assert(i == 1);
+    while(!bq.empty)
+        bq.pop();
+    assert(bq.empty == true);
+}
+
+unittest
+{
+    import core.thread;
+    shared BlockingQueue!int q = new shared BlockingQueue!int;
+    void producer() {
+        foreach (v; 0..100) {
+            q.push(v);
+        }
+    }
+    void consumer() {
+        foreach (v; 0..100) {
+            assert(q.pop == v);
+        }
+    }
+    auto prod = new Thread(&producer);
+    auto cons = new Thread(&consumer);
+    cons.start();
+    prod.start();
+    prod.join();
+    cons.join();
 }
