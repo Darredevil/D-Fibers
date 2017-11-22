@@ -47,7 +47,7 @@ shared int alive; // count of non-terminated Fibers
 //shared Queue!Fiber queue;  // this not a single queue(!)
 shared DList!Fiber queue;
 
-Mutex mtx;
+shared Mutex mtx;
 
 // https://syscalls.kernelgrok.com/ --------------------------------------------> x86 syscall table
 // http://blog.rchapman.org/posts/Linux_System_Call_Table_for_x86_64/ ----------> x64 syscall table
@@ -219,8 +219,7 @@ void eventloop()
                 if ((a.op & events[fd].events) != 0) {
                     //mtx.lock();
                     //Fiber f = a.fiber;
-                    //queue.insertBack(f); //something like this? - more or less however flags don't play well
-                    (cast(DList!Fiber)queue).insertBack(cast(Fiber)(a.fiber)); //something like this? - more or less however flags don't play well
+                    (cast(DList!Fiber)queue).insertBack(cast(Fiber)(a.fiber));
                     //mtx.unlock();
                 }
             }
