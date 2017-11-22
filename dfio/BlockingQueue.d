@@ -1,5 +1,7 @@
 // https://www.justsoftwaresolutions.co.uk/threading/implementing-a-thread-safe-queue-using-condition-variables.html
 
+module BlockingQueue;
+
 import std.container : DList;
 import core.sync.condition;
 import std.stdio;
@@ -44,7 +46,7 @@ shared class BlockingQueue(T) : WorkQueue!T {
         cond.unshared.mutex.lock();
         scope(exit) cond.unshared.mutex.unlock();
         if (queue.unshared.empty) {
-            
+
             return false;
         }
         item = queue.unshared.front;

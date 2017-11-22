@@ -1,3 +1,5 @@
+module dfio;
+
 import std.stdio;
 import std.string;
 import std.format;
@@ -6,20 +8,18 @@ import std.conv;
 import std.array;
 import core.thread;
 import std.container.dlist;
-import core.sys.posix.sys.types; // for ssize_t, uid_t, gid_t, off_t, pid_t, useconds_t
+import core.sys.posix.sys.types;
 import core.sys.posix.unistd;
 import core.sys.linux.epoll;
 import core.sync.mutex;
 import core.stdc.errno;
 import core.atomic;
+import BlockingQueue : BlockingQueue, unshared;
 
-// Now the below is LibC shim library
 Fiber currentFiber; // this is TLS per user thread
 
-// Queue of ready Fibers, we'd do it per thread but one for now
 shared int alive; // count of non-terminated Fibers
-//shared Queue!Fiber queue;  // this not a single queue(!)
-shared DList!Fiber queue;
+shared BlockingQueue!Fiber queue;
 
 shared Mutex mtx;
 
@@ -69,10 +69,9 @@ extern(C) ssize_t read(int fd, void *buf, size_t count)
         ssize_t resp = syscall(3, fd, cast(int) buf, cast(int) count);
         if (resp == EWOULDBLOCK || resp == EAGAIN) {          // TODO: verify EAGAIN (man read)
             add_await(fd, currentFiber, EPOLLIN);
-            mtx.lock();
-            currentFiber = (cast(DList!Fiber)queue).front;
-            (cast(DList!Fiber)queue).removeFront();
-            mtx.unlock();
+
+            currentFiber = queue.pop();
+
             Fiber.yield();
             continue;
         } else return resp;
@@ -86,10 +85,7 @@ void runUntilCompletion()
     while (alive > 0) {
         //currentFiber = take(queue); // TODO implement take
 
-        mtx.lock();
-        currentFiber = (cast(DList!Fiber)queue).front;
-        (cast(DList!Fiber)queue).removeFront();
-        mtx.unlock();
+        currentFiber = queue.pop();
 
         currentFiber.call();
         if (currentFiber.state == Fiber.State.TERM) {
@@ -100,25 +96,18 @@ void runUntilCompletion()
 
 void spawn(void function() func) {
     auto f = new Fiber(func);
-    mtx.lock();
-    (cast(DList!Fiber)queue).insertBack(f);
-    mtx.unlock();
+    queue.push(f);
 }
 
-
-// I/O scheduler is here ;)
-
-// That should be enough, descriptors[fd] is a state of a descriptor
 shared DescriptorState[] descriptors;
 shared int event_loop_fd;
 
-// This represents a blocked fiber
 struct AwaitingFiber {
-    Fiber fiber; // who does it
+    Fiber fiber;
     int op; // EPOLLIN if reading or EPOLLOUT if writing
 }
 
-// represents a state of FD == list of awaiting fibers
+// list of awaiting fibers
 struct DescriptorState {
     AwaitingFiber[] waiters;  // can optimize for 1-element case, more on that later
 }
@@ -142,7 +131,6 @@ void add_await(int fd, Fiber fiber, int op) {
        epoll_data_t data;
    };
 
-   TODO: epoll is kind nice, and lets us attach data to FD, we'll skip it for now
 */
 void event_add_fd(int fd) { // register new FD
     epoll_event event;
@@ -157,7 +145,7 @@ void event_remove_fd(int fd) { // on LibC's close
 
 void startloop()
 {
-    event_loop_fd = epoll_create(1000); // just be > 0 on newest kernels, again fail on errors
+    event_loop_fd = epoll_create(1000); // just be > 0 on newest kernels, TODO fail on errors
     eventloop();
 }
 
@@ -185,16 +173,13 @@ void startloop()
 
 
 enum int TIMEOUT = 100, MAX_EVENTS = 100;
-
-
 int haveUserThreads = 10;
 
 void eventloop()
 {
     epoll_event[100] events;
-    // so here we spin in a loop, unsurprisingly
     int epollfd = epoll_create1(0);
-    while(haveUserThreads) { // to be changed
+    while(1) { // TODO: infinite loop for now, revisit later
         // 1. call epoll
         int r = epoll_wait(epollfd, events.ptr, MAX_EVENTS, TIMEOUT);
         if (r < 0) {
@@ -209,9 +194,7 @@ void eventloop()
             foreach(a; w) {
                 // 3. the tick is read and write are separate, and then there are TODO: exceptions (errors)
                 if ((a.op & events[fd].events) != 0) {
-                    mtx.lock();
-                    (cast(DList!Fiber)queue).insertBack(cast(Fiber)(a.fiber));
-                    mtx.unlock();
+                    queue.push(cast(Fiber)(a.fiber));
                 }
             }
         }
