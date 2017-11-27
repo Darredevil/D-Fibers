@@ -4,7 +4,7 @@ import core.thread;
 import dfio;
 
 // run fibers until all of them terminate
-//void runUntilCompletion();
+// void runUntilCompletion();
 
 void main()
 {

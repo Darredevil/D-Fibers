@@ -94,8 +94,9 @@ void runUntilCompletion()
     }
 }
 
-void spawn(void function() func) {
+void spawn(void delegate() func) { //TODO: followup delagate instead of function
     auto f = new Fiber(func);
+    queue = new shared BlockingQueue!Fiber;
     queue.push(f);
 }
 
