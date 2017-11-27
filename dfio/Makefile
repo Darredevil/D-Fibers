@@ -7,8 +7,14 @@ build-lib:
 	dmd -g -oflibdfio.so dfio.o -shared -L-rpath=dfio
 	cp libdfio.so tests/
 
-run: build-tests
-	# cd tests && ./compiles_n_runs
+test-all: build-tests
+	cd tests && ./compiles_n_runs
+	cd tests && ./simple_read_write
+
+test-compiles_n_runs: build-tests
+	cd tests && ./compiles_n_runs
+
+test-simple_read_write: build-tests
 	cd tests && ./simple_read_write
 
 clean:
