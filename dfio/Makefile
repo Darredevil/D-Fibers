@@ -4,7 +4,7 @@ build-tests: build-lib
 build-lib:
 	dmd -c -g dfio.d -fPIC
 	dmd -c -g BlockingQueue.d
-	dmd -g -oflibdfio.so dfio.o -shared -L-rpath=/home/alexandru/workspace/dlang/D-Fibers/dfio-1.0
+	dmd -g -oflibdfio.so dfio.o -shared -L-rpath=dfio
 	cp libdfio.so tests/
 
 run: build-tests
