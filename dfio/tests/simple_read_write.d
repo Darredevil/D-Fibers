@@ -4,6 +4,7 @@ import core.sys.posix.sys.types;
 import std.socket;
 import core.stdc.errno;
 import core.sys.posix.sys.socket;
+import core.sys.posix.fcntl;
 import core.thread;
 import dfio;
 
@@ -30,19 +31,23 @@ void writer(int fd) {
 void reader(int fd) {
     writefln("<started reader, fd = %d>", fd);
     char[100] buf;
-    read(fd, buf.ptr, 17);
-    writefln("read buf = <%s>", buf);
+    ssize_t total = 17;
+    ssize_t bytes = 0;
+    while(bytes < total) {
+        ssize_t resp = read(fd, buf.ptr + bytes, total - bytes).checked;
+        writefln("read resp = %s", resp);
+        bytes += resp;
+    }
     writefln("<finished reader>");
 }
 
 void main() {
    int[2] socks;
-   check(socketpair(AF_UNIX, SOCK_STREAM /*| SOCK_NONBLOCK*/, 0, socks));
+   check(socketpair(AF_UNIX, SOCK_STREAM, 0, socks));
    writeln(socks);
+   fcntl(socks[1], F_SETFL, O_NONBLOCK);
    // spawn a thread to run I/O loop
-   auto io = new Thread(&startloop);
-   io.isDaemon = true;
-   io.start();
+   startloop();
    // spawn thread to write stuff
    auto wr = new Thread(() => writer(socks[0]));
    wr.start();

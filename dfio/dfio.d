@@ -66,12 +66,10 @@ extern(C) ssize_t read(int fd, void *buf, size_t count)
     writeln("HOOKED WITH MY LIB!"); // TODO: temporary for easy check, remove later
     // TODO: assumption - we will set O_NONBLOCK
     for(;;) {
-        ssize_t resp = syscall(3, fd, cast(int) buf, cast(int) count);
-        if (resp == EWOULDBLOCK || resp == EAGAIN) {          // TODO: verify EAGAIN (man read)
+        ssize_t resp = syscall(0x0, fd, cast(ssize_t) buf, cast(ssize_t) count);
+        if (resp == -EWOULDBLOCK || resp == -EAGAIN) {          // TODO: verify EAGAIN (man read)
             add_await(fd, currentFiber, EPOLLIN);
-
             currentFiber = queue.pop();
-
             Fiber.yield();
             continue;
         } else return resp;
@@ -86,9 +84,10 @@ void runUntilCompletion()
         //currentFiber = take(queue); // TODO implement take
 
         currentFiber = queue.pop();
-
+        writefln("Fiber %x started", cast(void*)currentFiber);
         currentFiber.call();
         if (currentFiber.state == Fiber.State.TERM) {
+            writefln("Fiber %s terminated", cast(void*)currentFiber);
             core.atomic.atomicOp!"-="(alive, 1);
         }
     }
@@ -98,6 +97,7 @@ void spawn(void delegate() func) { //TODO: followup delagate instead of function
     auto f = new Fiber(func);
     queue = new shared BlockingQueue!Fiber;
     queue.push(f);
+    core.atomic.atomicOp!"+="(alive, 1);
 }
 
 shared DescriptorState[] descriptors;
@@ -146,8 +146,14 @@ void event_remove_fd(int fd) { // on LibC's close
 
 void startloop()
 {
-    event_loop_fd = epoll_create(1000); // just be > 0 on newest kernels, TODO fail on errors
-    eventloop();
+    mtx = cast(shared)new Mutex();
+    event_loop_fd = epoll_create1(0);
+    ssize_t fds = sysconf(_SC_OPEN_MAX).checked;
+    descriptors = cast(shared)new DescriptorState[fds];
+    if (event_loop_fd < 0) perror("Failed to create event-loop");
+    auto io = new Thread(&eventloop);
+    io.isDaemon = true;
+    io.start();
 }
 
 /*
@@ -176,19 +182,27 @@ void startloop()
 enum int TIMEOUT = 100, MAX_EVENTS = 100;
 int haveUserThreads = 10;
 
+ssize_t checked(ssize_t value, const char* msg="unknown place") {
+    if (value < 0) {
+        perror(msg); 
+    }
+    return value;
+}
+
 void eventloop()
 {
-    epoll_event[100] events;
-    int epollfd = epoll_create1(0);
+    epoll_event[MAX_EVENTS] events;
     while(1) { // TODO: infinite loop for now, revisit later
         // 1. call epoll
-        int r = epoll_wait(epollfd, events.ptr, MAX_EVENTS, TIMEOUT);
+        int r = epoll_wait(event_loop_fd, events.ptr, MAX_EVENTS, TIMEOUT);
         if (r < 0) {
             // TODO handle error
+            perror("Error on epoll");
             _exit(r); //quick and dirty for now
         }
         // 2. move waiters ---> queue
         for (int n = 0; n < r; n++) {
+            writefln("Event %s on fd=%s", events[n].events, events[n].data);
             int fd = events[n].data.fd;
             auto w = descriptors[fd].waiters;   // <-- TODO: locking
             //TODO: remove the ones from the waiting list
