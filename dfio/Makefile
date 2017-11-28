@@ -1,9 +1,11 @@
-build-tests: build-lib
+build-tests: libdfio.so BlockingQueue.o
 	cd tests && make
 
-build-lib:
-	dmd -c -g dfio.d -fPIC
+BlockingQueue.o:
 	dmd -c -g BlockingQueue.d
+
+libdfio.so: dfio.d
+	dmd -c -g dfio.d -fPIC
 	dmd -g -oflibdfio.so dfio.o -shared -L-rpath=dfio
 	cp libdfio.so tests/
 
