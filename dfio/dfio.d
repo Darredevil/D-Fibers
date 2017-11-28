@@ -25,10 +25,6 @@ shared int alive; // count of non-terminated Fibers
 shared BlockingQueue!Fiber queue;
 shared Mutex mtx;
 
-// https://syscalls.kernelgrok.com/ --------------------------------------------> x86 syscall table
-// http://blog.rchapman.org/posts/Linux_System_Call_Table_for_x86_64/ ----------> x64 syscall table
-// https://github.com/kubo39/syscall-d/blob/master/source/syscalld/arch/syscall_x86.d
-
 enum int TIMEOUT = 100, MAX_EVENTS = 100;
 
 int checked(int value, const char* msg="unknown place") {
@@ -134,7 +130,7 @@ shared int event_loop_fd;
 
 struct AwaitingFiber {
     Fiber fiber;
-    int op; // EPOLLIN if reading or EPOLLOUT if writing
+    int op; // EPOLLIN = reading & EPOLLOUT = writing
 }
 
 // list of awaiting fibers
@@ -148,20 +144,6 @@ void add_await(int fd, Fiber fiber, int op) {
     mtx.unlock();
 }
 
-/*
-   typedef union epoll_data {
-       void        *ptr;
-       int          fd;
-       uint32_t     u32;
-       uint64_t     u64;
-   } epoll_data_t;
-
-   struct epoll_event {
-       uint32_t     events;
-       epoll_data_t data;
-   };
-
-*/
 void event_add_fd(int fd) { // register new FD
     epoll_event event;
     event.events = EPOLLIN | EPOLLOUT; // TODO: most events that make sense to watch for
@@ -169,7 +151,7 @@ void event_add_fd(int fd) { // register new FD
     epoll_ctl(event_loop_fd, EPOLL_CTL_ADD, fd, &event).checked("ERROR: failed epoll_ctl add!");
 }
 
-void event_remove_fd(int fd) { // on LibC's close
+void event_remove_fd(int fd) { // TODO: on LibC's close
     epoll_ctl(event_loop_fd, EPOLL_CTL_DEL, fd, null).checked("ERROR: failed epoll_ctl delete!");
 }
 
@@ -187,47 +169,26 @@ void startloop(int[] fds)
     io.start();
 }
 
-/*
-       EPOLLIN
-              The associated file is available for read(2) operations.
-
-       EPOLLOUT
-              The associated file is available for write(2) operations.
-
-       EPOLLRDHUP
-              Stream socket peer closed connection, or shut down writing
-              half of connection.
-
-       EPOLLPRI
-              There is an exceptional condition on the file descriptor.
-
-       EPOLLERR
-              Error condition happened on the associated file descriptor.
-       EPOLLHUP
-              Hang up happened on the associated file descriptor.
-              epoll_wait(2) will always wait for this event; it is not nec‐
-              essary to set it in events.
-*/
-
 void eventloop()
 {
     epoll_event[MAX_EVENTS] events;
-    while(managedThreads > 0) { // TODO: infinite loop for now, revisit later
-        // 1. call epoll
+    while(managedThreads > 0) {
+
         int r = epoll_wait(event_loop_fd, events.ptr, MAX_EVENTS, TIMEOUT)
             .checked("ERROR: failed epoll_wait");
         stderr.writefln("Passed epoll_wait, r = %d", r);
-        // 2. move waiters ---> queue
+
         for (int n = 0; n < r; n++) {
             int fd = events[n].data.fd;
             mtx.lock();
             auto w = descriptors[fd].waiters;
+
             //TODO: remove the ones from the waiting list
             size_t j = 0;
             for (size_t i = 0; i<w.length;) {
                 auto a = w[i];
                 //stderr.writefln("Event %s on fd=%s op=%s waiter=%s", events[n].events, events[n].data.fd, a.op, cast(void*)a.fiber);
-                // 3. the tick is read and write are separate, and then there are TODO: exceptions (errors)
+                // 3. the trick is read and write are separate, and then there are TODO: exceptions (errors)
                 if ((a.op & events[n].events) != 0) {
                     stderr.writeln("HERE!");
                     queue.push(cast(Fiber)(a.fiber));

@@ -1,5 +1,3 @@
-// https://www.justsoftwaresolutions.co.uk/threading/implementing-a-thread-safe-queue-using-condition-variables.html
-
 module BlockingQueue;
 
 import std.container : DList;
