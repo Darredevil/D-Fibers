@@ -15,6 +15,8 @@ import core.sync.mutex;
 import core.stdc.errno;
 import core.atomic;
 import BlockingQueue : BlockingQueue, unshared;
+import core.sys.posix.stdlib: abort;
+import core.sys.posix.fcntl;
 
 Fiber currentFiber; // this is TLS per user thread
 
@@ -26,6 +28,24 @@ shared Mutex mtx;
 // https://syscalls.kernelgrok.com/ --------------------------------------------> x86 syscall table
 // http://blog.rchapman.org/posts/Linux_System_Call_Table_for_x86_64/ ----------> x64 syscall table
 // https://github.com/kubo39/syscall-d/blob/master/source/syscalld/arch/syscall_x86.d
+
+enum int TIMEOUT = 100, MAX_EVENTS = 100;
+
+int checked(int value, const char* msg="unknown place") {
+    if (value < 0) {
+        perror(msg);
+        _exit(value);
+    }
+    return value;
+}
+
+ssize_t checked(ssize_t value, const char* msg="unknown place") {
+    if (value < 0) {
+        perror(msg);
+        abort();
+    }
+    return value;
+}
 
 version (X86) {
     int syscall(int ident, int n, int arg1, int arg2)
@@ -64,10 +84,19 @@ version (X86) {
 extern(C) ssize_t read(int fd, void *buf, size_t count)
 {
     writeln("HOOKED WITH MY LIB!"); // TODO: temporary for easy check, remove later
-    // TODO: assumption - we will set O_NONBLOCK
+
+    int flags = fcntl(fd, F_GETFL, 0);
+    if (!(flags & O_NONBLOCK)) {
+        perror("WARNING: Socket not set in O_NONBLOCK mode!");
+        //abort(); //TODO: enforce abort?
+    }
     for(;;) {
-        ssize_t resp = syscall(0x0, fd, cast(ssize_t) buf, cast(ssize_t) count);
-        if (resp == -EWOULDBLOCK || resp == -EAGAIN) {          // TODO: verify EAGAIN (man read)
+        version (X86) {
+            ssize_t resp = syscall(0x3, fd, cast(ssize_t) buf, cast(ssize_t) count);
+        } else version (X86_64) {
+            ssize_t resp = syscall(0x0, fd, cast(ssize_t) buf, cast(ssize_t) count);
+        }
+        if (resp == -EWOULDBLOCK || resp == -EAGAIN) {
             add_await(fd, currentFiber, EPOLLIN);
             currentFiber = queue.pop();
             Fiber.yield();
@@ -93,7 +122,7 @@ void runUntilCompletion()
     }
 }
 
-void spawn(void delegate() func) { //TODO: followup delagate instead of function
+void spawn(void delegate() func) {
     auto f = new Fiber(func);
     queue = new shared BlockingQueue!Fiber;
     queue.push(f);
@@ -137,20 +166,19 @@ void event_add_fd(int fd) { // register new FD
     epoll_event event;
     event.events = EPOLLIN | EPOLLOUT; // TODO: most events that make sense to watch for
     event.data.fd = fd;
-    epoll_ctl(event_loop_fd, fd, EPOLL_CTL_ADD, &event); // TODO: check for errors
+    epoll_ctl(event_loop_fd, EPOLL_CTL_ADD, fd, &event).checked("ERROR: failed epoll_ctl add!");
 }
 
 void event_remove_fd(int fd) { // on LibC's close
-    epoll_ctl(event_loop_fd, fd, EPOLL_CTL_DEL, null); // TODO: check for errors
+    epoll_ctl(event_loop_fd, EPOLL_CTL_DEL, fd, null).checked("ERROR: failed epoll_ctl delete!");
 }
 
 void startloop()
 {
     mtx = cast(shared)new Mutex();
-    event_loop_fd = epoll_create1(0);
+    event_loop_fd = cast(int)epoll_create1(0).checked("ERROR: Failed to create event-loop!");
     ssize_t fds = sysconf(_SC_OPEN_MAX).checked;
     descriptors = cast(shared)new DescriptorState[fds];
-    if (event_loop_fd < 0) perror("Failed to create event-loop");
     auto io = new Thread(&eventloop);
     io.isDaemon = true;
     io.start();
@@ -178,28 +206,13 @@ void startloop()
               essary to set it in events.
 */
 
-
-enum int TIMEOUT = 100, MAX_EVENTS = 100;
-int haveUserThreads = 10;
-
-ssize_t checked(ssize_t value, const char* msg="unknown place") {
-    if (value < 0) {
-        perror(msg); 
-    }
-    return value;
-}
-
 void eventloop()
 {
     epoll_event[MAX_EVENTS] events;
     while(1) { // TODO: infinite loop for now, revisit later
         // 1. call epoll
-        int r = epoll_wait(event_loop_fd, events.ptr, MAX_EVENTS, TIMEOUT);
-        if (r < 0) {
-            // TODO handle error
-            perror("Error on epoll");
-            _exit(r); //quick and dirty for now
-        }
+        int r = epoll_wait(event_loop_fd, events.ptr, MAX_EVENTS, TIMEOUT)
+            .checked("ERROR: failed epoll_wait");
         // 2. move waiters ---> queue
         for (int n = 0; n < r; n++) {
             writefln("Event %s on fd=%s", events[n].events, events[n].data);

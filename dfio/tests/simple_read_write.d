@@ -6,6 +6,7 @@ import core.stdc.errno;
 import core.sys.posix.sys.socket;
 import core.sys.posix.fcntl;
 import core.thread;
+import core.sys.posix.stdlib: abort;
 import dfio;
 
 // http://man7.org/linux/man-pages/man2/socketpair.2.html
@@ -14,8 +15,7 @@ extern(C) ssize_t read(int fd, void *buf, size_t count);
 
 void check(int code) {
     if(code < 0)
-        //abort();
-        _exit(-1337);
+        abort();
 }
 
 // if this writes say 100 bytes total
