@@ -47,7 +47,7 @@ void main() {
    writeln(socks);
    fcntl(socks[1], F_SETFL, O_NONBLOCK);
    // spawn a thread to run I/O loop
-   startloop();
+   startloop(socks);
    // spawn thread to write stuff
    auto wr = new Thread(() => writer(socks[0]));
    wr.start();

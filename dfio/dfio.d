@@ -173,12 +173,16 @@ void event_remove_fd(int fd) { // on LibC's close
     epoll_ctl(event_loop_fd, EPOLL_CTL_DEL, fd, null).checked("ERROR: failed epoll_ctl delete!");
 }
 
-void startloop()
+void startloop(int[] fds)
 {
     mtx = cast(shared)new Mutex();
     event_loop_fd = cast(int)epoll_create1(0).checked("ERROR: Failed to create event-loop!");
-    ssize_t fds = sysconf(_SC_OPEN_MAX).checked;
-    descriptors = cast(shared)new DescriptorState[fds];
+    ssize_t fdMax = sysconf(_SC_OPEN_MAX).checked;
+    descriptors = cast(shared)new DescriptorState[fdMax];
+
+    foreach(f; fds)
+        event_add_fd(f);
+
     auto io = new Thread(&eventloop);
     io.isDaemon = true;
     io.start();
@@ -213,11 +217,16 @@ void eventloop()
         // 1. call epoll
         int r = epoll_wait(event_loop_fd, events.ptr, MAX_EVENTS, TIMEOUT)
             .checked("ERROR: failed epoll_wait");
+        writefln("Passed epoll_wait, r = %d", r);
         // 2. move waiters ---> queue
         for (int n = 0; n < r; n++) {
-            writefln("Event %s on fd=%s", events[n].events, events[n].data);
+            writefln("Event %s on fd=%s", events[n].events, events[n].data.fd);
             int fd = events[n].data.fd;
-            auto w = descriptors[fd].waiters;   // <-- TODO: locking
+
+            mtx.lock();
+            auto w = descriptors[fd].waiters;
+            mtx.unlock();
+
             //TODO: remove the ones from the waiting list
             foreach(a; w) {
                 // 3. the tick is read and write are separate, and then there are TODO: exceptions (errors)
