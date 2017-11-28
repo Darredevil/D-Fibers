@@ -20,9 +20,9 @@ import core.sys.posix.fcntl;
 
 Fiber currentFiber; // this is TLS per user thread
 
+shared int managedThreads = 0;
 shared int alive; // count of non-terminated Fibers
 shared BlockingQueue!Fiber queue;
-
 shared Mutex mtx;
 
 // https://syscalls.kernelgrok.com/ --------------------------------------------> x86 syscall table
@@ -109,24 +109,26 @@ extern(C) ssize_t read(int fd, void *buf, size_t count)
 
 void runUntilCompletion()
 {
+    atomicOp!"+="(managedThreads, 1);
     while (alive > 0) {
         //currentFiber = take(queue); // TODO implement take
 
         currentFiber = queue.pop();
-        writefln("Fiber %x started", cast(void*)currentFiber);
+        stderr.writefln("Fiber %x started", cast(void*)currentFiber);
         currentFiber.call();
         if (currentFiber.state == Fiber.State.TERM) {
-            writefln("Fiber %s terminated", cast(void*)currentFiber);
-            core.atomic.atomicOp!"-="(alive, 1);
+            stderr.writefln("Fiber %s terminated", cast(void*)currentFiber);
+            atomicOp!"-="(alive, 1);
         }
     }
+    atomicOp!"-="(managedThreads, 1);
 }
 
 void spawn(void delegate() func) {
     auto f = new Fiber(func);
     queue = new shared BlockingQueue!Fiber;
     queue.push(f);
-    core.atomic.atomicOp!"+="(alive, 1);
+    atomicOp!"+="(alive, 1);
 }
 
 shared DescriptorState[] descriptors;
@@ -144,7 +146,7 @@ struct DescriptorState {
 
 void add_await(int fd, Fiber fiber, int op) {
     mtx.lock();
-    (cast(DescriptorState[])descriptors)[fd].waiters ~= AwaitingFiber(currentFiber, EPOLLIN);
+    (cast(DescriptorState[])descriptors)[fd].waiters ~= AwaitingFiber(currentFiber, op);
     mtx.unlock();
 }
 
@@ -183,8 +185,7 @@ void startloop(int[] fds)
     foreach(f; fds)
         event_add_fd(f);
 
-    auto io = new Thread(&eventloop);
-    io.isDaemon = true;
+    auto io = new Thread(&eventloop, 64*1024);
     io.start();
 }
 
@@ -213,27 +214,35 @@ void startloop(int[] fds)
 void eventloop()
 {
     epoll_event[MAX_EVENTS] events;
-    while(1) { // TODO: infinite loop for now, revisit later
+    while(managedThreads > 0) { // TODO: infinite loop for now, revisit later
         // 1. call epoll
         int r = epoll_wait(event_loop_fd, events.ptr, MAX_EVENTS, TIMEOUT)
             .checked("ERROR: failed epoll_wait");
-        writefln("Passed epoll_wait, r = %d", r);
+        stderr.writefln("Passed epoll_wait, r = %d", r);
         // 2. move waiters ---> queue
         for (int n = 0; n < r; n++) {
-            writefln("Event %s on fd=%s", events[n].events, events[n].data.fd);
             int fd = events[n].data.fd;
-
             mtx.lock();
             auto w = descriptors[fd].waiters;
-            mtx.unlock();
-
             //TODO: remove the ones from the waiting list
-            foreach(a; w) {
+            size_t j = 0;
+            for (size_t i = 0; i<w.length;) {
+                auto a = w[i];
+                //stderr.writefln("Event %s on fd=%s op=%s waiter=%s", events[n].events, events[n].data.fd, a.op, cast(void*)a.fiber);
                 // 3. the tick is read and write are separate, and then there are TODO: exceptions (errors)
-                if ((a.op & events[fd].events) != 0) {
+                if ((a.op & events[n].events) != 0) {
+                    stderr.writeln("HERE!");
                     queue.push(cast(Fiber)(a.fiber));
+                    i++;
+                }
+                else if(i != j) {
+                    w[j] = w[i];
+                    j++;
+                    i++;
                 }
             }
+            mtx.unlock();
+            Thread.yield();
         }
     }
 }
