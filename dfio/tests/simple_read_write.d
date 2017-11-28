@@ -20,25 +20,25 @@ void check(int code) {
 
 // if this writes say 100 bytes total
 void writer(int fd) {
-    writefln("<started writer, fd = %d>", fd);
+    stderr.writefln("<started writer, fd = %d>", fd);
     auto s = "simple read write\n";
     char[] buf = s.dup;
-    write(fd, s.ptr, s.length);
-    writefln("<finished writer>");
+    write(fd, s.ptr, s.length).checked;
+    stderr.writefln("<finished writer>");
 }
 
 // it must read the exact same amount (in total) that would be 100 bytes
 void reader(int fd) {
-    writefln("<started reader, fd = %d>", fd);
+    stderr.writefln("<started reader, fd = %d>", fd);
     char[100] buf;
     ssize_t total = 17;
     ssize_t bytes = 0;
     while(bytes < total) {
         ssize_t resp = read(fd, buf.ptr + bytes, total - bytes).checked;
-        writefln("read resp = %s", resp);
+        stderr.writefln("read resp = %s", resp);
         bytes += resp;
     }
-    writefln("<finished reader>");
+    stderr.writefln("<finished reader>");
 }
 
 void main() {
@@ -47,7 +47,7 @@ void main() {
    writeln(socks);
    fcntl(socks[1], F_SETFL, O_NONBLOCK);
    // spawn a thread to run I/O loop
-   startloop(socks);
+   startloop(socks[1..2]);
    // spawn thread to write stuff
    auto wr = new Thread(() => writer(socks[0]));
    wr.start();
