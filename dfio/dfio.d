@@ -48,6 +48,7 @@ ssize_t checked(ssize_t value, const char* msg="unknown place") {
 }
 
 version (X86) {
+    enum int SYS_READ = 0x3;
     int syscall(int ident, int n, int arg1, int arg2)
     {
         int ret;
@@ -64,6 +65,7 @@ version (X86) {
         return ret;
     }
 } else version (X86_64) {
+    enum int SYS_READ = 0x0;
     size_t syscall(size_t ident, size_t n, size_t arg1, size_t arg2)
     {
         size_t ret;
@@ -91,11 +93,7 @@ extern(C) ssize_t read(int fd, void *buf, size_t count)
         //abort(); //TODO: enforce abort?
     }
     for(;;) {
-        version (X86) {
-            ssize_t resp = syscall(0x3, fd, cast(ssize_t) buf, cast(ssize_t) count);
-        } else version (X86_64) {
-            ssize_t resp = syscall(0x0, fd, cast(ssize_t) buf, cast(ssize_t) count);
-        }
+        ssize_t resp = syscall(SYS_READ, fd, cast(ssize_t) buf, cast(ssize_t) count);
         if (resp == -EWOULDBLOCK || resp == -EAGAIN) {
             add_await(fd, currentFiber, EPOLLIN);
             currentFiber = queue.pop();
