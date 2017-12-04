@@ -22,7 +22,8 @@ C# and Dart would be an examples of 2nd option - language extension to tackle ex
 
 Current situation with I/O in DLang looks roughly like the following diagram. Due to D's ability to call into arbitrary C libraries we have the full Zoo of options without any of the benefits. To be specific we have normal synchronous I/O in std library (std.socket etc.), fiber-based I/O scheduling as an opt-in library, sometimes explicit async I/O of kind in 3rd party C libraries and synchronous I/O in the general mass of C libraries.
 
-The landscape is naturally a wild west, see below ![D Application I/O Zoo diagram](img/DApp.svg)
+The landscape is naturally a wild west, see below 
+![D Application I/O Zoo diagram](img/DApp.svg)
 
 Specifically note the points of interaction 1-4:
 1. Fiber-aware D library talks to vibe.d via special wrappers of most socket operations, this is pseudoblocking model. Note that a library has to depend on vibe.d to benefit + user has to run vibe.d scheduler for it to work.
