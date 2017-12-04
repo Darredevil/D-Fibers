@@ -2,15 +2,15 @@
 
 ## Intro
 
-The goal of the project is to transparently enable the model of "pseudosynchronious" I/O (popularized by Go language) for all of D libraries and even most of C libraries. It combines scalability of asynchronous I/O with simple programming model of synchronous I/O.
+The goal of the project is to transparently enable the model of "pseudosynchronous" I/O (popularized by Go language) for all of D libraries and even most of C libraries. It combines the scalability of asynchronous I/O with simple programming model of synchronous I/O.
 
-In short, a there are roughly 3 ways (glossing over OS specific abilities) to tackle I/O.
+In short, there are roughly 3 ways (glossing over OS specific abilities) to tackle I/O.
 
 1. Synchronous (blocking) I/O, where a kernel will block a thread and wake it up once the resource is available. This has the advantage of simple programming model at the expense of hogging a precious OS resource - threads, in addition to an expensive round-trip through the OS kernel to perform a context switch.
 
-2. Explicit asynchronous (async) I/O. Typically involves passing a callback that is triggered on completion. More convenient model builds an algebra of Promise/Future objects on top of callbacks, such objects are then manipulated in functional way. Lastly async/await extensions to some languages rewrite away the error-prone callback code via code transformation. Scalability comes from the fact that the thread continues on with its work after registering callback, so a single thread may process a multitude of sockets at the same time.
+2. Explicit asynchronous (async) I/O. Typically involves passing a callback that is triggered on completion. More convenient model builds an algebra of Promise/Future objects on top of callbacks, such objects are then manipulated in a functional way. Lastly async/await extensions to some languages rewrite away the error-prone callback code via code transformation. Scalability comes from the fact that the thread continues on with its work after registering callback, so a single thread may process a multitude of sockets at the same time.
 
-3. Pseudosynchronous (pseudoblocking) I/O, this is built on green thread (fiber in D) concept. First it makes fibers cheap, typically by allocating a modest stack size and/or growing it on demand. Secondly the runtime of the language (or the library) takes the burden of the context switch thus making it cheap to go from one green thread to the other. The moment a fiber wants to do a synchronous I/O the runtime will instead do async I/O and transparently switch context to another fiber.
+3. Pseudosynchronous (pseudoblocking) I/O, this is built on the green thread (Fiber in D) concept. First it makes fibers cheap, typically by allocating a modest stack size and/or growing it on demand. Secondly the runtime of the language (or the library) takes the burden of the context switch thus making it cheap to go from one green thread to the other. The moment a fiber wants to do a synchronous I/O the runtime will instead do async I/O and transparently switch context to another fiber.
 
 There are oversimplifications in the above introductions. In particular on Linux AIO (Asynchronous I/O) is a separate thing from non-blocking I/O and typically event-loops that implement schemes 2 & 3 noted above would use non-blocking I/O + kernel event system. More on that below.
 
@@ -39,10 +39,10 @@ The end result is a brittle ecosystem where even if you have a 3rd party "driver
 
 ## Solution
 
-This project is an attempting a bold approach to solve this problem once and for all:
-1. Introduce event loop and green threads as unescapable component initialized at start up or lazily (no separate opt-in library library as in vibe.d).
+This project is attempting a bold approach to solve this problem once and for all:
+1. Introduce event loop and green threads as unescapable component initialized at start up or lazily (no separate opt-in library as in vibe.d).
 2. Replace the libc syscall wrapper so that any blocking call relying on it (which is next to all) is transparently rewired to go through pseudoblocking runtime. All 3rd party libraries do fiber-aware pseudoblocking I/O automatically.
-3. The rest of the libraries that do explicit async I/O stay as their are, their syscall are passed through. In future we choose to intercept them as well to re-route to our eventloop, basically emulating the likes of `select`, `poll` and `epoll` in user-space by reusing the same event cache.
+3. The rest of the libraries that do explicit async I/O stay as their are, their syscall are passed through. In the future we will intercept them as well to re-route to our eventloop, basically emulating the likes of `select`, `poll` and `epoll` in user-space by reusing the same event cache.
 4. Finally vibe.d may produce a thin-shelled version that forward all of calls to blocking I/O to reuse our scheduler.
 
 Note: the approach of overriding underlying libc facilities is not something new or uncalled for, e.g. jemalloc does it fitfully to replace default libc memory allocator.
