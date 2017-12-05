@@ -9,8 +9,6 @@ import core.thread;
 import core.sys.posix.stdlib: abort;
 import dfio;
 
-extern(C) ssize_t read(int fd, void *buf, size_t count);
-
 void check(int code) {
     if(code < 0)
         abort();
@@ -41,11 +39,10 @@ void reader(int fd) {
 
 void main() {
    int[2] socks;
+   startloop();
    check(socketpair(AF_UNIX, SOCK_STREAM, 0, socks));
    writeln(socks);
-   fcntl(socks[1], F_SETFL, O_NONBLOCK);
    // spawn a thread to run I/O loop
-   startloop(socks[1..2]);
    // spawn thread to write stuff
    auto wr = new Thread(() => writer(socks[0]));
    wr.start();

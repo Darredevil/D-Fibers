@@ -22,10 +22,11 @@ Fiber currentFiber; // this is TLS per user thread
 
 shared int managedThreads = 0;
 shared int alive; // count of non-terminated Fibers
+shared bool completed = false;
 shared BlockingQueue!Fiber queue;
 shared Mutex mtx;
 
-enum int TIMEOUT = 100, MAX_EVENTS = 100;
+enum int TIMEOUT = 1, MAX_EVENTS = 100;
 
 int checked(int value, const char* msg="unknown place") {
     if (value < 0) {
@@ -44,7 +45,7 @@ ssize_t checked(ssize_t value, const char* msg="unknown place") {
 }
 
 version (X86) {
-    enum int SYS_READ = 0x3;
+    enum int SYS_READ = 0x3, SYS_SOCKETPAIR = 0x168; //TODO test on x86
     int syscall(int ident, int n, int arg1, int arg2)
     {
         int ret;
@@ -60,8 +61,43 @@ version (X86) {
         }
         return ret;
     }
+
+    int syscall(int ident, int n, int arg1, int arg2, int arg3)
+    {
+        int ret;
+
+        synchronized asm
+        {
+            mov EAX, ident;
+            mov EBX, n[EBP];
+            mov ECX, arg1[EBP];
+            mov EDX, arg2[EBP];
+            mov ESI, arg3[EBP];
+            int 0x80;
+            mov ret, EAX;
+        }
+        return ret;
+    }
+
+    int syscall(int ident, int n, int arg1, int arg2, int arg3, int arg4)
+    {
+        int ret;
+
+        synchronized asm
+        {
+            mov EAX, ident;
+            mov EBX, n[EBP];
+            mov ECX, arg1[EBP];
+            mov EDX, arg2[EBP];
+            mov ESI, arg3[EBP];
+            mov EDI, arg4[EBP];
+            int 0x80;
+            mov ret, EAX;
+        }
+        return ret;
+    }
 } else version (X86_64) {
-    enum int SYS_READ = 0x0;
+    enum int SYS_READ = 0x0, SYS_SOCKETPAIR = 0x35;
     size_t syscall(size_t ident, size_t n, size_t arg1, size_t arg2)
     {
         size_t ret;
@@ -77,11 +113,46 @@ version (X86) {
         }
         return ret;
     }
+
+    size_t syscall(size_t ident, size_t n, size_t arg1, size_t arg2, size_t arg3)
+    {
+        size_t ret;
+
+        synchronized asm
+        {
+            mov RAX, ident;
+            mov RDI, n[RBP];
+            mov RSI, arg1[RBP];
+            mov RDX, arg2[RBP];
+            mov R10, arg3[RBP];
+            syscall;
+            mov ret, RAX;
+        }
+        return ret;
+    }
+
+    size_t syscall(size_t ident, size_t n, size_t arg1, size_t arg2, size_t arg3, size_t arg4)
+    {
+        size_t ret;
+
+        synchronized asm
+        {
+            mov RAX, ident;
+            mov RDI, n[RBP];
+            mov RSI, arg1[RBP];
+            mov RDX, arg2[RBP];
+            mov R10, arg3[RBP];
+            mov R8, arg4[RBP];
+            syscall;
+            mov ret, RAX;
+        }
+        return ret;
+    }
 }
 
 extern(C) ssize_t read(int fd, void *buf, size_t count)
 {
-    writeln("HOOKED WITH MY LIB!"); // TODO: temporary for easy check, remove later
+    writeln("HOOKED READ WITH MY LIB!"); // TODO: temporary for easy check, remove later
 
     int flags = fcntl(fd, F_GETFL, 0);
     if (!(flags & O_NONBLOCK)) {
@@ -101,6 +172,22 @@ extern(C) ssize_t read(int fd, void *buf, size_t count)
     return -1337;
 }
 
+extern(C) int socketpair(int domain, int type, int protocol, int* sv)
+{
+    writeln("HOOKED SOCKETPAIR WITH MY LIB!"); // TODO: temporary for easy check, remove later
+
+    ssize_t ret = syscall(SYS_SOCKETPAIR, domain, type, protocol, cast(size_t) sv);
+    if (ret < 0)
+        abort();
+
+    // intercept syscall to add lib logic
+    // make this part invisible for the user
+    fcntl(sv[1], F_SETFL, O_NONBLOCK);
+    foreach(f; sv[0..2])
+        event_add_fd(f);
+    return cast(int) ret;
+}
+
 void runUntilCompletion()
 {
     atomicOp!"+="(managedThreads, 1);
@@ -116,6 +203,7 @@ void runUntilCompletion()
         }
     }
     atomicOp!"-="(managedThreads, 1);
+    completed = true;
 }
 
 void spawn(void delegate() func) {
@@ -155,15 +243,12 @@ void event_remove_fd(int fd) { // TODO: on LibC's close
     epoll_ctl(event_loop_fd, EPOLL_CTL_DEL, fd, null).checked("ERROR: failed epoll_ctl delete!");
 }
 
-void startloop(int[] fds)
+void startloop()
 {
     mtx = cast(shared)new Mutex();
     event_loop_fd = cast(int)epoll_create1(0).checked("ERROR: Failed to create event-loop!");
     ssize_t fdMax = sysconf(_SC_OPEN_MAX).checked;
     descriptors = cast(shared)new DescriptorState[fdMax];
-
-    foreach(f; fds)
-        event_add_fd(f);
 
     auto io = new Thread(&eventloop, 64*1024);
     io.start();
@@ -172,8 +257,7 @@ void startloop(int[] fds)
 void eventloop()
 {
     epoll_event[MAX_EVENTS] events;
-    while(managedThreads > 0) {
-
+    while(!completed || managedThreads > 0) {
         int r = epoll_wait(event_loop_fd, events.ptr, MAX_EVENTS, TIMEOUT)
             .checked("ERROR: failed epoll_wait");
         stderr.writefln("Passed epoll_wait, r = %d", r);
@@ -199,9 +283,12 @@ void eventloop()
                     j++;
                     i++;
                 }
+                else
+                    i++;
             }
             mtx.unlock();
             Thread.yield();
         }
     }
+    stderr.writefln("Exited event loop!");
 }
