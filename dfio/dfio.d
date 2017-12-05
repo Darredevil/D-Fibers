@@ -22,10 +22,11 @@ Fiber currentFiber; // this is TLS per user thread
 
 shared int managedThreads = 0;
 shared int alive; // count of non-terminated Fibers
+shared bool completed = false;
 shared BlockingQueue!Fiber queue;
 shared Mutex mtx;
 
-enum int TIMEOUT = 100, MAX_EVENTS = 100;
+enum int TIMEOUT = 1, MAX_EVENTS = 100;
 
 int checked(int value, const char* msg="unknown place") {
     if (value < 0) {
@@ -182,9 +183,8 @@ extern(C) int socketpair(int domain, int type, int protocol, int* sv)
     // intercept syscall to add lib logic
     // make this part invisible for the user
     fcntl(sv[1], F_SETFL, O_NONBLOCK);
-    startloop(sv[0..2]);
-    runUntilCompletion();
-
+    foreach(f; sv[0..2])
+        event_add_fd(f);
     return cast(int) ret;
 }
 
@@ -203,6 +203,7 @@ void runUntilCompletion()
         }
     }
     atomicOp!"-="(managedThreads, 1);
+    completed = true;
 }
 
 void spawn(void delegate() func) {
@@ -242,15 +243,12 @@ void event_remove_fd(int fd) { // TODO: on LibC's close
     epoll_ctl(event_loop_fd, EPOLL_CTL_DEL, fd, null).checked("ERROR: failed epoll_ctl delete!");
 }
 
-void startloop(int[] fds)
+void startloop()
 {
     mtx = cast(shared)new Mutex();
     event_loop_fd = cast(int)epoll_create1(0).checked("ERROR: Failed to create event-loop!");
     ssize_t fdMax = sysconf(_SC_OPEN_MAX).checked;
     descriptors = cast(shared)new DescriptorState[fdMax];
-
-    foreach(f; fds)
-        event_add_fd(f);
 
     auto io = new Thread(&eventloop, 64*1024);
     io.start();
@@ -259,8 +257,7 @@ void startloop(int[] fds)
 void eventloop()
 {
     epoll_event[MAX_EVENTS] events;
-    while(managedThreads > 0) {
-
+    while(!completed || managedThreads > 0) {
         int r = epoll_wait(event_loop_fd, events.ptr, MAX_EVENTS, TIMEOUT)
             .checked("ERROR: failed epoll_wait");
         stderr.writefln("Passed epoll_wait, r = %d", r);
@@ -286,9 +283,12 @@ void eventloop()
                     j++;
                     i++;
                 }
+                else
+                    i++;
             }
             mtx.unlock();
             Thread.yield();
         }
     }
+    stderr.writefln("Exited event loop!");
 }

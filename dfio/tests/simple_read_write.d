@@ -3,14 +3,11 @@ import core.sys.posix.unistd : write, _exit;
 import core.sys.posix.sys.types;
 import std.socket;
 import core.stdc.errno;
-//import core.sys.posix.sys.socket;
+import core.sys.posix.sys.socket;
 import core.sys.posix.fcntl;
 import core.thread;
 import core.sys.posix.stdlib: abort;
 import dfio;
-
-extern(C) ssize_t read(int fd, void *buf, size_t count);
-extern(C) int socketpair(int domain, int type, int protocol, int sv[2]);
 
 void check(int code) {
     if(code < 0)
@@ -42,6 +39,7 @@ void reader(int fd) {
 
 void main() {
    int[2] socks;
+   startloop();
    check(socketpair(AF_UNIX, SOCK_STREAM, 0, socks));
    writeln(socks);
    // spawn a thread to run I/O loop
@@ -51,6 +49,7 @@ void main() {
 
    // spawn fiber to read stuff
    spawn(() => reader(socks[1]));
+   runUntilCompletion();
    //
    wr.join();
 }
