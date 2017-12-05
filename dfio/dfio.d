@@ -44,7 +44,7 @@ ssize_t checked(ssize_t value, const char* msg="unknown place") {
 }
 
 version (X86) {
-    enum int SYS_READ = 0x3;
+    enum int SYS_READ = 0x3, SYS_SOCKETPAIR = 0x168; //TODO test on x86
     int syscall(int ident, int n, int arg1, int arg2)
     {
         int ret;
@@ -60,8 +60,43 @@ version (X86) {
         }
         return ret;
     }
+
+    int syscall(int ident, int n, int arg1, int arg2, int arg3)
+    {
+        int ret;
+
+        synchronized asm
+        {
+            mov EAX, ident;
+            mov EBX, n[EBP];
+            mov ECX, arg1[EBP];
+            mov EDX, arg2[EBP];
+            mov ESI, arg3[EBP];
+            int 0x80;
+            mov ret, EAX;
+        }
+        return ret;
+    }
+
+    int syscall(int ident, int n, int arg1, int arg2, int arg3, int arg4)
+    {
+        int ret;
+
+        synchronized asm
+        {
+            mov EAX, ident;
+            mov EBX, n[EBP];
+            mov ECX, arg1[EBP];
+            mov EDX, arg2[EBP];
+            mov ESI, arg3[EBP];
+            mov EDI, arg4[EBP];
+            int 0x80;
+            mov ret, EAX;
+        }
+        return ret;
+    }
 } else version (X86_64) {
-    enum int SYS_READ = 0x0;
+    enum int SYS_READ = 0x0, SYS_SOCKETPAIR = 0x35;
     size_t syscall(size_t ident, size_t n, size_t arg1, size_t arg2)
     {
         size_t ret;
@@ -77,11 +112,46 @@ version (X86) {
         }
         return ret;
     }
+
+    size_t syscall(size_t ident, size_t n, size_t arg1, size_t arg2, size_t arg3)
+    {
+        size_t ret;
+
+        synchronized asm
+        {
+            mov RAX, ident;
+            mov RDI, n[RBP];
+            mov RSI, arg1[RBP];
+            mov RDX, arg2[RBP];
+            mov R10, arg3[RBP];
+            syscall;
+            mov ret, RAX;
+        }
+        return ret;
+    }
+
+    size_t syscall(size_t ident, size_t n, size_t arg1, size_t arg2, size_t arg3, size_t arg4)
+    {
+        size_t ret;
+
+        synchronized asm
+        {
+            mov RAX, ident;
+            mov RDI, n[RBP];
+            mov RSI, arg1[RBP];
+            mov RDX, arg2[RBP];
+            mov R10, arg3[RBP];
+            mov R8, arg4[RBP];
+            syscall;
+            mov ret, RAX;
+        }
+        return ret;
+    }
 }
 
 extern(C) ssize_t read(int fd, void *buf, size_t count)
 {
-    writeln("HOOKED WITH MY LIB!"); // TODO: temporary for easy check, remove later
+    writeln("HOOKED READ WITH MY LIB!"); // TODO: temporary for easy check, remove later
 
     int flags = fcntl(fd, F_GETFL, 0);
     if (!(flags & O_NONBLOCK)) {
@@ -99,6 +169,23 @@ extern(C) ssize_t read(int fd, void *buf, size_t count)
     }
     // This should never be reached
     return -1337;
+}
+
+extern(C) int socketpair(int domain, int type, int protocol, int* sv)
+{
+    writeln("HOOKED SOCKETPAIR WITH MY LIB!"); // TODO: temporary for easy check, remove later
+
+    ssize_t ret = syscall(SYS_SOCKETPAIR, domain, type, protocol, cast(size_t) sv);
+    if (ret < 0)
+        abort();
+
+    // intercept syscall to add lib logic
+    // make this part invisible for the user
+    fcntl(sv[1], F_SETFL, O_NONBLOCK);
+    startloop(sv[0..2]);
+    runUntilCompletion();
+
+    return cast(int) ret;
 }
 
 void runUntilCompletion()
