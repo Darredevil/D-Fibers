@@ -278,13 +278,11 @@ void eventloop()
                     queue.push(cast(Fiber)(a.fiber));
                     i++;
                 }
-                else if(i != j) {
+                else {
                     w[j] = w[i];
                     j++;
                     i++;
                 }
-                else
-                    i++;
             }
             mtx.unlock();
             Thread.yield();
