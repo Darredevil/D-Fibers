@@ -24,7 +24,7 @@ Current situation with I/O in DLang looks roughly like the following diagram. Du
 
 The landscape is naturally a wild west, see below
 
-![D Application I/O Zoo diagram](img/DApp.svg)
+![D Application I/O Zoo diagram](img/DApp.png)
 
 Specifically note the points of interaction 1-4:
 1. Fiber-aware D library talks to vibe.d via special wrappers of most socket operations, this is pseudoblocking model. Note that a library has to depend on vibe.d to benefit + user has to run vibe.d scheduler for it to work.
