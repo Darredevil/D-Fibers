@@ -154,6 +154,7 @@ extern(C) ssize_t read(int fd, void *buf, size_t count)
 {
     writeln("HOOKED READ WITH MY LIB!"); // TODO: temporary for easy check, remove later
 
+
     int flags = fcntl(fd, F_GETFL, 0);
     if (!(flags & O_NONBLOCK)) {
         stderr.writefln("WARNING: Socket (%d) not set in O_NONBLOCK mode!", fd);
@@ -168,8 +169,14 @@ extern(C) ssize_t read(int fd, void *buf, size_t count)
             continue;
         } else return resp;
     }
+
+    if (!descriptors[fd].firstUse) {
+        fcntl(fd, F_SETFL, O_NONBLOCK);
+        descriptors[fd].firstUse = true;
+    }
+
     // This should never be reached
-    return -1337;
+    return 0;
 }
 
 extern(C) int socketpair(int domain, int type, int protocol, int* sv)
@@ -182,7 +189,8 @@ extern(C) int socketpair(int domain, int type, int protocol, int* sv)
 
     // intercept syscall to add lib logic
     // make this part invisible for the user
-    fcntl(sv[1], F_SETFL, O_NONBLOCK);
+    //fcntl(sv[0], F_SETFL, O_NONBLOCK);
+    //fcntl(sv[1], F_SETFL, O_NONBLOCK);
     foreach(f; sv[0..2])
         event_add_fd(f);
     return cast(int) ret;
@@ -224,6 +232,7 @@ struct AwaitingFiber {
 // list of awaiting fibers
 struct DescriptorState {
     AwaitingFiber[] waiters;  // can optimize for 1-element case, more on that later
+    bool firstUse = false;
 }
 
 void add_await(int fd, Fiber fiber, int op) {

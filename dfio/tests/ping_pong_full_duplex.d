@@ -20,6 +20,8 @@ void writerReader(int fd1, int fd2) {
     auto s = "simple read write\n";
     write(fd1, s.ptr, s.length).checked;
 
+    stderr.writefln("<midway writerReader, fd1 = %d, fd2 = %d>", fd1, fd2);
+
     char[100] buf2;
     ssize_t total = 17;
     ssize_t bytes = 0;
@@ -43,6 +45,8 @@ void readerWriter(int fd1, int fd2) {
         stderr.writefln("read2 resp = %s", resp);
         bytes += resp;
     }
+
+    stderr.writefln("<midway readerWriter, fd1 = %d, fd2 = %d>", fd1, fd2);
 
     auto s = "simple read write\n";
     char[] buf2 = s.dup;
