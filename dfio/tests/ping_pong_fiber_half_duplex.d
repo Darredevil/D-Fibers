@@ -18,7 +18,6 @@ void check(int code) {
 void writer(int fd) {
     stderr.writefln("<started writer, fd = %d>", fd);
     auto s = "simple read write\n";
-    char[] buf = s.dup;
     write(fd, s.ptr, s.length).checked;
     stderr.writefln("<finished writer>");
 }
@@ -44,11 +43,11 @@ void main() {
    writeln(socks);
    // spawn a thread to run I/O loop
    // spawn thread to write stuff
-   auto wr = new Thread(() => writer(socks[0]));
+   auto wr = new Thread(() => reader(socks[0]));
    wr.start();
 
    // spawn fiber to read stuff
-   spawn(() => reader(socks[1]));
+   spawn(() => writer(socks[1]));
    runUntilCompletion();
    //
    wr.join();

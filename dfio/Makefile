@@ -11,13 +11,24 @@ libdfio.so: dfio.d
 
 test-all: build-tests
 	cd tests && ./compiles_n_runs
-	cd tests && ./simple_read_write
+	cd tests && ./ping_pong_fiber_half_duplex
+	cd tests && ./ping_pong_thread_half_duplex
+	cd tests && ./ping_pong_full_duplex
 
 test-compiles_n_runs: build-tests
 	cd tests && ./compiles_n_runs
 
 test-simple_read_write: build-tests
 	cd tests && ./simple_read_write
+
+test-ping_pong_fiber_half_duplex: build-tests
+	cd tests && ./ping_pong_fiber_half_duplex
+
+test-ping_pong_thread_half_duplex: build-tests
+	cd tests && ./ping_pong_thread_half_duplex
+
+test-ping_pong_full_duplex: build-tests
+	cd tests && ./ping_pong_full_duplex
 
 clean:
 	cd tests && make clean

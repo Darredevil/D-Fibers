@@ -156,7 +156,7 @@ extern(C) ssize_t read(int fd, void *buf, size_t count)
 
     int flags = fcntl(fd, F_GETFL, 0);
     if (!(flags & O_NONBLOCK)) {
-        perror("WARNING: Socket not set in O_NONBLOCK mode!");
+        stderr.writefln("WARNING: Socket (%d) not set in O_NONBLOCK mode!", fd);
         //abort(); //TODO: enforce abort?
     }
     for(;;) {
@@ -260,7 +260,7 @@ void eventloop()
     while(!completed || managedThreads > 0) {
         int r = epoll_wait(event_loop_fd, events.ptr, MAX_EVENTS, TIMEOUT)
             .checked("ERROR: failed epoll_wait");
-        stderr.writefln("Passed epoll_wait, r = %d", r);
+        debug stderr.writefln("Passed epoll_wait, r = %d", r);
 
         for (int n = 0; n < r; n++) {
             int fd = events[n].data.fd;
@@ -274,7 +274,7 @@ void eventloop()
                 //stderr.writefln("Event %s on fd=%s op=%s waiter=%s", events[n].events, events[n].data.fd, a.op, cast(void*)a.fiber);
                 // 3. the trick is read and write are separate, and then there are TODO: exceptions (errors)
                 if ((a.op & events[n].events) != 0) {
-                    stderr.writeln("HERE!");
+                    debug stderr.writeln("HERE!");
                     queue.push(cast(Fiber)(a.fiber));
                     i++;
                 }
