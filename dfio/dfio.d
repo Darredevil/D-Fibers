@@ -28,6 +28,11 @@ shared Mutex mtx;
 
 enum int TIMEOUT = 1, MAX_EVENTS = 100;
 
+void logf(string file = __FILE__, int line = __LINE__, T...)(string msg, T args)
+{
+    stderr.writefln("%s:%s:\t%s", file, line, format(msg, args));
+}
+
 int checked(int value, const char* msg="unknown place") {
     if (value < 0) {
         perror(msg);
@@ -66,7 +71,7 @@ version (X86) {
     {
         int ret;
 
-        synchronized asm
+        asm
         {
             mov EAX, ident;
             mov EBX, n[EBP];
@@ -83,7 +88,7 @@ version (X86) {
     {
         int ret;
 
-        synchronized asm
+        asm
         {
             mov EAX, ident;
             mov EBX, n[EBP];
@@ -102,7 +107,7 @@ version (X86) {
     {
         size_t ret;
 
-        synchronized asm
+        asm
         {
             mov RAX, ident;
             mov RDI, n[RBP];
@@ -118,7 +123,7 @@ version (X86) {
     {
         size_t ret;
 
-        synchronized asm
+        asm
         {
             mov RAX, ident;
             mov RDI, n[RBP];
@@ -135,7 +140,7 @@ version (X86) {
     {
         size_t ret;
 
-        synchronized asm
+        asm
         {
             mov RAX, ident;
             mov RDI, n[RBP];
@@ -152,47 +157,42 @@ version (X86) {
 
 extern(C) ssize_t read(int fd, void *buf, size_t count)
 {
-    writeln("HOOKED READ WITH MY LIB!"); // TODO: temporary for easy check, remove later
-
-
-    int flags = fcntl(fd, F_GETFL, 0);
-    if (!(flags & O_NONBLOCK)) {
-        stderr.writefln("WARNING: Socket (%d) not set in O_NONBLOCK mode!", fd);
-        //abort(); //TODO: enforce abort?
+    if (currentFiber is null) {
+        logf("READ PASSTHROUGH!");
+        return syscall(SYS_READ, fd, cast(ssize_t) buf, cast(ssize_t) count);
     }
-    for(;;) {
-        ssize_t resp = syscall(SYS_READ, fd, cast(ssize_t) buf, cast(ssize_t) count);
-        if (resp == -EWOULDBLOCK || resp == -EAGAIN) {
-            add_await(fd, currentFiber, EPOLLIN);
-            currentFiber = queue.pop();
-            Fiber.yield();
-            continue;
-        } else return resp;
+    else {
+        logf("HOOKED READ WITH MY LIB!"); // TODO: temporary for easy check, remove later
+        if (descriptors[fd].firstUse) {
+            fcntl(fd, F_SETFL, O_NONBLOCK).checked;
+            event_add_fd(fd);
+            descriptors[fd].firstUse = false;
+        }
+        int flags = fcntl(fd, F_GETFL, 0);
+        if (!(flags & O_NONBLOCK)) {
+            logf("WARNING: Socket (%d) not set in O_NONBLOCK mode!", fd);
+            //abort(); //TODO: enforce abort?
+        }
+        for(;;) {
+            ssize_t resp = syscall(SYS_READ, fd, cast(ssize_t) buf, cast(ssize_t) count);
+            if (resp == -EWOULDBLOCK || resp == -EAGAIN) {
+                logf("READ GOT DELAYED - FD %d, resp = %d", fd, resp);
+                add_await(fd, currentFiber, EPOLLIN);
+                Fiber.yield();
+                continue;
+            } else return resp;
+        }
+        assert(0);
     }
-
-    if (!descriptors[fd].firstUse) {
-        fcntl(fd, F_SETFL, O_NONBLOCK);
-        descriptors[fd].firstUse = true;
-    }
-
-    // This should never be reached
-    return 0;
 }
 
 extern(C) int socketpair(int domain, int type, int protocol, int* sv)
 {
-    writeln("HOOKED SOCKETPAIR WITH MY LIB!"); // TODO: temporary for easy check, remove later
+    logf("HOOKED SOCKETPAIR WITH MY LIB!"); // TODO: temporary for easy check, remove later
 
     ssize_t ret = syscall(SYS_SOCKETPAIR, domain, type, protocol, cast(size_t) sv);
     if (ret < 0)
         abort();
-
-    // intercept syscall to add lib logic
-    // make this part invisible for the user
-    //fcntl(sv[0], F_SETFL, O_NONBLOCK);
-    //fcntl(sv[1], F_SETFL, O_NONBLOCK);
-    foreach(f; sv[0..2])
-        event_add_fd(f);
     return cast(int) ret;
 }
 
@@ -203,10 +203,10 @@ void runUntilCompletion()
         //currentFiber = take(queue); // TODO implement take
 
         currentFiber = queue.pop();
-        stderr.writefln("Fiber %x started", cast(void*)currentFiber);
+        logf("Fiber %x started", cast(void*)currentFiber);
         currentFiber.call();
         if (currentFiber.state == Fiber.State.TERM) {
-            stderr.writefln("Fiber %s terminated", cast(void*)currentFiber);
+            logf("Fiber %s terminated", cast(void*)currentFiber);
             atomicOp!"-="(alive, 1);
         }
     }
@@ -232,7 +232,7 @@ struct AwaitingFiber {
 // list of awaiting fibers
 struct DescriptorState {
     AwaitingFiber[] waiters;  // can optimize for 1-element case, more on that later
-    bool firstUse = false;
+    bool firstUse = true;
 }
 
 void add_await(int fd, Fiber fiber, int op) {
@@ -269,7 +269,7 @@ void eventloop()
     while(!completed || managedThreads > 0) {
         int r = epoll_wait(event_loop_fd, events.ptr, MAX_EVENTS, TIMEOUT)
             .checked("ERROR: failed epoll_wait");
-        debug stderr.writefln("Passed epoll_wait, r = %d", r);
+        //debug stderr.writefln("Passed epoll_wait, r = %d", r);
 
         for (int n = 0; n < r; n++) {
             int fd = events[n].data.fd;
@@ -283,7 +283,7 @@ void eventloop()
                 //stderr.writefln("Event %s on fd=%s op=%s waiter=%s", events[n].events, events[n].data.fd, a.op, cast(void*)a.fiber);
                 // 3. the trick is read and write are separate, and then there are TODO: exceptions (errors)
                 if ((a.op & events[n].events) != 0) {
-                    debug stderr.writeln("HERE!");
+                    logf("EVENT ON %d", fd);
                     queue.push(cast(Fiber)(a.fiber));
                     i++;
                 }
@@ -293,9 +293,10 @@ void eventloop()
                     i++;
                 }
             }
+            descriptors[fd].waiters = w[0..j];
             mtx.unlock();
             Thread.yield();
         }
     }
-    stderr.writefln("Exited event loop!");
+    logf("Exited event loop!");
 }
