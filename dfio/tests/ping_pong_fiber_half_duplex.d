@@ -16,31 +16,31 @@ void check(int code) {
 
 // if this writes say 100 bytes total
 void writer(int fd) {
-    stderr.writefln("<started writer, fd = %d>", fd);
+    logf("<started writer, fd = %d>", fd);
     auto s = "simple read write\n";
     write(fd, s.ptr, s.length).checked;
-    stderr.writefln("<finished writer>");
+    logf("<finished writer>");
 }
 
 // it must read the exact same amount (in total) that would be 100 bytes
 void reader(int fd) {
-    stderr.writefln("<started reader, fd = %d>", fd);
+    logf("<started reader, fd = %d>", fd);
     char[100] buf;
     ssize_t total = 17;
     ssize_t bytes = 0;
     while(bytes < total) {
         ssize_t resp = read(fd, buf.ptr + bytes, total - bytes).checked;
-        stderr.writefln("read resp = %s", resp);
+        logf("read resp = %s", resp);
         bytes += resp;
     }
-    stderr.writefln("<finished reader>");
+    logf("<finished reader>");
 }
 
 void main() {
    int[2] socks;
    startloop();
    check(socketpair(AF_UNIX, SOCK_STREAM, 0, socks));
-   writeln(socks);
+   logf("socks = %s", socks);
    // spawn a thread to run I/O loop
    // spawn thread to write stuff
    auto wr = new Thread(() => reader(socks[0]));
