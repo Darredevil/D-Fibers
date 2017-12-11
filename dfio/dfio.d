@@ -164,6 +164,7 @@ extern(C) ssize_t read(int fd, void *buf, size_t count)
     else {
         logf("HOOKED READ WITH MY LIB!"); // TODO: temporary for easy check, remove later
         if (descriptors[fd].firstUse) {
+            logf("First use, registering fd = %d", fd);
             fcntl(fd, F_SETFL, O_NONBLOCK).checked;
             event_add_fd(fd);
             descriptors[fd].firstUse = false;
@@ -216,7 +217,6 @@ void runUntilCompletion()
 
 void spawn(void delegate() func) {
     auto f = new Fiber(func);
-    queue = new shared BlockingQueue!Fiber;
     queue.push(f);
     atomicOp!"+="(alive, 1);
 }
@@ -258,6 +258,7 @@ void startloop()
     event_loop_fd = cast(int)epoll_create1(0).checked("ERROR: Failed to create event-loop!");
     ssize_t fdMax = sysconf(_SC_OPEN_MAX).checked;
     descriptors = cast(shared)new DescriptorState[fdMax];
+    queue = new shared BlockingQueue!Fiber;
 
     auto io = new Thread(&eventloop, 64*1024);
     io.start();
