@@ -30,6 +30,12 @@ test-ping_pong_thread_half_duplex: build-tests
 test-ping_pong_full_duplex: build-tests
 	cd tests && ./ping_pong_full_duplex
 
+test-ping_pong_full_duplex_4: build-tests
+	cd tests && ./ping_pong_full_duplex_4
+
+test-ping_pong_full_duplex_20: build-tests
+	cd tests && ./ping_pong_full_duplex_20
+
 clean:
 	cd tests && make clean
 	rm -f *.o *.so main
