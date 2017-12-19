@@ -1,10 +1,12 @@
 import std.stdio;
 import core.sys.posix.unistd : write, _exit;
 import core.sys.posix.sys.types;
+import core.memory;
 import std.socket;
 import core.stdc.errno;
 import core.stdc.string;
 import std.string;
+import std.getopt;
 import core.sys.posix.sys.socket;
 import core.sys.posix.fcntl;
 import core.thread;
@@ -60,14 +62,18 @@ void readerWriter(int fd1, int fd2, string toSend, string toRecv) {
     logf("<finished readerWriter, fd1 = %d, fd2 = %d>", fd1, fd2);
 }
 
-void main() {
-    enum int NR = 8;
-    int[2][NR] socks;
+void main(string[] args) {
+    int NR;
+
+    getopt(args,
+        "count", &NR);
+
+    int[][] socks = new int[][](NR, 2);
     string s1 = "first read write\n";
     string s2 = "second read write\n";
     startloop();
     for(int i = 0; i < NR; i++) {
-        check(socketpair(AF_UNIX, SOCK_STREAM, 0, socks[i]));
+        check(socketpair(AF_UNIX, SOCK_STREAM, 0, socks[i].ptr));
         //logf("socks[i] = %s", i, socks[i]);
     }
 
