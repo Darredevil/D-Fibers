@@ -43,6 +43,7 @@ void writerReader(int fd1, int fd2, string toSend, string toRecv) {
 
 // it must read the exact same amount (in total) that would be 100 bytes
 void readerWriter(int fd1, int fd2, string toSend, string toRecv) {
+    logf("Fiber = %s", cast(void*)currentFiber);
     logf("<started readerWriter, fd1 = %d, fd2 = %d>", fd1, fd2);
     char[100] buf = 0;
     ssize_t total = toRecv.length;
@@ -62,12 +63,16 @@ void readerWriter(int fd1, int fd2, string toSend, string toRecv) {
     logf("<finished readerWriter, fd1 = %d, fd2 = %d>", fd1, fd2);
 }
 
+void fiberPongPing(int fd1, int fd2, string toSend, string toRecv){
+    spawn(() => readerWriter(fd1, fd2, toSend, toRecv));
+}
+
 void main(string[] args) {
     int NR;
 
     getopt(args,
         "count", &NR);
-
+    NR *= 2;
     int[][] socks = new int[][](NR, 2);
     string s1 = "first read write\n";
     string s2 = "second read write\n";
@@ -87,7 +92,10 @@ void main(string[] args) {
         auto a1 = socks[i][0];
         auto a2 = socks[i+1][0];
         //auto wr = new Thread(() => writerReader(socks[i][0], socks[i+1][0], s2, s1));
-        auto wr = new Thread(() => writerReader(a1, a2, s2, s1)); // BUG: must use temp vars a1,a2 else it crashes
+        auto wr = new Thread({
+            logf("In writer lambda %s, %s", a1, a2);
+            writerReader(a1, a2, s2, s1);
+        }); // BUG: must use temp vars a1,a2 else it crashes
         logf("wr = %s", cast(void*)wr);
         wr.start();
         wrs ~= wr;
@@ -95,17 +103,20 @@ void main(string[] args) {
 
     // spawn fiber to read stuff
     for(int i = 0; i < NR; i += 2) {
-        if ((i+1) <= socks.length && socks[i].length > 1) {
-            stderr.writefln("socks[i][1] = %d, socks[i][1+1] = %d", socks[i][1], socks[i+1][1]);
-            auto a1 = socks[i][1];
-            auto a2 = socks[i+1][1];
-            spawn(() => readerWriter( // BUG: must use temp vars a1,a2 else it crashes
-                //socks[i][1],
-                a1,
-                //socks[qi+1][1],
-                a2,
-                s1, s2));
-        }
+        logf("socks[i][1] = %d, socks[i][1+1] = %d", socks[i][1], socks[i+1][1]);
+        auto a1 = socks[i][1];
+        auto a2 = socks[i+1][1];
+        fiberPongPing(a1, a2, s1, s2);
+        //BUG: cross-talk in lambdas in the same function
+        /*spawn({ 
+            logf("In reader lambda %s, %s", a1, a2);
+            readerWriter( // BUG: must use temp vars a1,a2 else it crashes
+            //socks[i][1],
+            a1,
+            //socks[qi+1][1],
+            a2,
+            s1, s2);
+        });*/
     }
     runUntilCompletion();
     //

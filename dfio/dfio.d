@@ -30,7 +30,7 @@ enum int TIMEOUT = 1, MAX_EVENTS = 100;
 
 void logf(string file = __FILE__, int line = __LINE__, T...)(string msg, T args)
 {
-    stderr.writefln("%s:%s:\t%s", file, line, format(msg, args));
+    stderr.writefln("%s:%s:[LWP:%s]\t%s", file, line, Thread.getThis.id, format(msg, args));
 }
 
 int checked(int value, const char* msg="unknown place") {
