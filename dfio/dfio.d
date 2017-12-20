@@ -9,6 +9,7 @@ import std.array;
 import core.thread;
 import std.container.dlist;
 import core.sys.posix.sys.types;
+import core.sys.posix.sys.socket;
 import core.sys.posix.unistd;
 import core.sys.linux.epoll;
 import core.sync.mutex;
@@ -102,7 +103,8 @@ version (X86) {
         return ret;
     }
 } else version (X86_64) {
-    enum int SYS_READ = 0x0, SYS_SOCKETPAIR = 0x35;
+    enum int SYS_READ = 0x0, SYS_WRITE = 0x1, SYS_SOCKETPAIR = 0x35, SYS_ACCEPT = 0x2b,
+        SYS_ACCEPT4 = 0x120, SYS_CONNECT = 0x2a, SYS_SENDTO = 0x2c;
     size_t syscall(size_t ident, size_t n, size_t arg1, size_t arg2)
     {
         size_t ret;
@@ -153,6 +155,25 @@ version (X86) {
         }
         return ret;
     }
+
+    size_t syscall(size_t ident, size_t n, size_t arg1, size_t arg2, size_t arg3, size_t arg4, size_t arg5)
+{
+        size_t ret;
+
+        asm
+        {
+            mov RAX, ident;
+            mov RDI, n[RBP];
+            mov RSI, arg1[RBP];
+            mov RDX, arg2[RBP];
+            mov R10, arg3[RBP];
+            mov R8, arg4[RBP];
+            mov R9, arg5[RBP];
+            syscall;
+            mov ret, RAX;
+        }
+        return ret;
+}
 }
 
 extern(C) ssize_t read(int fd, void *buf, size_t count)
@@ -187,6 +208,16 @@ extern(C) ssize_t read(int fd, void *buf, size_t count)
     }
 }
 
+extern(C) ssize_t write(int fd, const void *buf, size_t count)
+{
+    logf("HOOKED WRITE WITH MY LIB!"); // TODO: temporary for easy check, remove later
+
+    ssize_t ret = syscall(SYS_WRITE, fd, cast(size_t) buf, count);
+    if (ret < 0)
+        abort();
+    return cast(int) ret;
+}
+
 extern(C) int socketpair(int domain, int type, int protocol, int* sv)
 {
     logf("HOOKED SOCKETPAIR WITH MY LIB!"); // TODO: temporary for easy check, remove later
@@ -196,6 +227,49 @@ extern(C) int socketpair(int domain, int type, int protocol, int* sv)
         abort();
     return cast(int) ret;
 }
+
+extern(C) int accept(int sockfd, sockaddr *addr, socklen_t *addrlen)
+{
+    logf("HOOKED ACCEPT WITH MY LIB!"); // TODO: temporary for easy check, remove later
+
+    ssize_t ret = syscall(SYS_ACCEPT, sockfd, cast(size_t) addr, cast(size_t) addrlen);
+    if (ret < 0)
+        abort();
+    return cast(int) ret;
+}
+
+extern(C) int accept4(int sockfd, sockaddr *addr, socklen_t *addrlen, int flags)
+{
+    logf("HOOKED ACCEPT4 WITH MY LIB!"); // TODO: temporary for easy check, remove later
+
+    ssize_t ret = syscall(SYS_ACCEPT, sockfd, cast(size_t) addr, cast(size_t) addrlen, flags);
+    if (ret < 0)
+        abort();
+    return cast(int) ret;
+}
+
+extern(C) int connect(int sockfd, const sockaddr *addr, socklen_t addrlen)
+{
+    logf("HOOKED CONNECT WITH MY LIB!"); // TODO: temporary for easy check, remove later
+
+    ssize_t ret = syscall(SYS_ACCEPT, sockfd, cast(size_t) addr, cast(size_t) addrlen);
+    if (ret < 0)
+        abort();
+    return cast(int) ret;
+}
+
+extern(C) ssize_t sendto(int sockfd, const void *buf, size_t len, int flags,
+                      const sockaddr *dest_addr, socklen_t addrlen)
+{
+    logf("HOOKED SENDTO WITH MY LIB!"); // TODO: temporary for easy check, remove later
+
+    ssize_t ret = syscall(SYS_SENDTO, sockfd, cast(size_t) buf, len, flags,
+        cast(size_t) dest_addr, /*cast(size_t)*/ addrlen);
+    if (ret < 0)
+        abort();
+    return cast(int) ret;
+}
+
 
 void runUntilCompletion()
 {
