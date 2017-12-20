@@ -42,6 +42,9 @@ test-ping_pong_full_duplex_8: build-tests
 test-ping_pong_full_duplex_20: build-tests
 	cd tests && ./ping_pong_full_duplex_n --count=20
 
+test-echo_sever: build-tests
+	cd tests && ./echo_server
+
 clean:
 	cd tests && make clean
 	rm -f *.o *.so main
