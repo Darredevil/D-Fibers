@@ -10,6 +10,7 @@ import std.getopt;
 import core.sys.posix.sys.socket;
 import core.sys.posix.fcntl;
 import core.thread;
+import core.time;
 import core.sys.posix.stdlib: abort;
 import std.conv : to;
 import dfio;
@@ -20,54 +21,61 @@ void check(int code) {
 }
 
 // if this writes say 100 bytes total
-void writerReader(int fd1, int fd2, string toSend, string toRecv) {
-    logf("<started writerReader, fd1 = %d, fd2 = %d>", fd1, fd2);
+void writerReader(int fd, string toSend, string toRecv) {
+    logf("<started writerReader, fd = %d>", fd);
     auto s = "simple read write\n";
-    write(fd1, toSend.ptr, toSend.length).checked;
+    write(fd, toSend.ptr, toSend.length).checked;
 
-    logf("<midway writerReader, fd1 = %d, fd2 = %d>", fd1, fd2);
+    logf("<midway writerReader, fd = %d>", fd);
 
     char[100] buf2 = 0;
     ssize_t total = toRecv.length;
     ssize_t bytes = 0;
     while(bytes < total) {
-        ssize_t resp = read(fd2, buf2.ptr + bytes, total - bytes).checked;
+        ssize_t resp = read(fd, buf2.ptr + bytes, total - bytes).checked;
         logf("read1 resp = %s", resp);
         bytes += resp;
     }
 
     assert(cmp(fromStringz(buf2.ptr), toRecv) == 0);
 
-    logf("<finished writerReader, fd1 = %d, fd2 = %d>", fd1, fd2);
+    logf("<finished writerReader, fd = %d>", fd);
 }
 
 // it must read the exact same amount (in total) that would be 100 bytes
-void readerWriter(int fd1, int fd2, string toSend, string toRecv) {
-    logf("<started readerWriter, fd1 = %d, fd2 = %d>", fd1, fd2);
+void readerWriter(int fd, string toSend, string toRecv) {
+    logf("Fiber = %s", cast(void*)currentFiber);
+    logf("<started readerWriter, fd = %d>", fd);
     char[100] buf = 0;
     ssize_t total = toRecv.length;
     ssize_t bytes = 0;
     while(bytes < total) {
-        ssize_t resp = read(fd1, buf.ptr + bytes, total - bytes).checked;
+        ssize_t resp = read(fd, buf.ptr + bytes, total - bytes).checked;
         logf("read2 resp = %s", resp);
         bytes += resp;
     }
 
     assert(cmp(fromStringz(buf.ptr), toRecv) == 0);
-    logf("<midway readerWriter, fd1 = %d, fd2 = %d>", fd1, fd2);
+    logf("<midway readerWriter, fd = %d>", fd);
 
     auto s = "simple read write\n";
     char[] buf2 = s.dup;
-    write(fd2, toSend.ptr, toSend.length).checked;
-    logf("<finished readerWriter, fd1 = %d, fd2 = %d>", fd1, fd2);
+    write(fd, toSend.ptr, toSend.length).checked;
+    logf("<finished readerWriter, fd = %d>", fd);
+}
+
+Thread threadPingPong(int fd, string toSend, string toRecv) {
+    return new Thread(() => writerReader(fd, toSend, toRecv));
+}
+
+void fiberPongPing(int fd, string toSend, string toRecv) {
+    spawn(() => readerWriter(fd, toSend, toRecv));
 }
 
 void main(string[] args) {
     int NR;
-
     getopt(args,
         "count", &NR);
-
     int[][] socks = new int[][](NR, 2);
     string s1 = "first read write\n";
     string s2 = "second read write\n";
@@ -78,34 +86,22 @@ void main(string[] args) {
     }
 
     logf("socks = %s", socks);
-
-
     // spawn a thread to run I/O loop
     // spawn thread to write stuff
     Thread[] wrs;
-    for(int i = 0; i < NR; i += 2) {
-        auto a1 = socks[i][0];
-        auto a2 = socks[i+1][0];
-        //auto wr = new Thread(() => writerReader(socks[i][0], socks[i+1][0], s2, s1));
-        auto wr = new Thread(() => writerReader(a1, a2, s2, s1)); // BUG: must use temp vars a1,a2 else it crashes
+    for(int i = 0; i < NR; i ++) {
+        auto a = socks[i][0];
+        auto wr = threadPingPong(a, s2, s1);
         logf("wr = %s", cast(void*)wr);
         wr.start();
         wrs ~= wr;
     }
 
     // spawn fiber to read stuff
-    for(int i = 0; i < NR; i += 2) {
-        if ((i+1) <= socks.length && socks[i].length > 1) {
-            stderr.writefln("socks[i][1] = %d, socks[i][1+1] = %d", socks[i][1], socks[i+1][1]);
-            auto a1 = socks[i][1];
-            auto a2 = socks[i+1][1];
-            spawn(() => readerWriter( // BUG: must use temp vars a1,a2 else it crashes
-                //socks[i][1],
-                a1,
-                //socks[qi+1][1],
-                a2,
-                s1, s2));
-        }
+    for(int i = 0; i < NR; i++) {
+        logf("socks[i][1] = %d", socks[i][1]);
+        auto a = socks[i][1];
+        fiberPongPing(a, s1, s2);
     }
     runUntilCompletion();
     //
