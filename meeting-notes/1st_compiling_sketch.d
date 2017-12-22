@@ -22,16 +22,16 @@ import core.atomic;
 void spawn(void function() func);
 
 // run fibers until all of them terminate
-void runUntilCompletion();
+void runFibers();
 
 void main(){
     auto t1 = new Thread(() {
        //...
-       runUntilCompletion();
+       runFibers();
     });
     auto t2 = new Thread(() {
        //...
-       runUntilCompletion();
+       runFibers();
     });
     t1.start(); t2.start();
     t1.join();
@@ -89,7 +89,7 @@ ssize_t read(int fd, void *buf, size_t count)
     else return resp; // the easy way out ;)
 }
 
-void runUntilCompletion()
+void runFibers()
 {
     while (alive > 0) { 
         //currentFiber = take(queue); // TODO implement take

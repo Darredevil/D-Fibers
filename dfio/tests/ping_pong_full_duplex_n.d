@@ -81,7 +81,7 @@ void main(string[] args) {
     string s2 = "second read write\n";
     startloop();
     for(int i = 0; i < NR; i++) {
-        check(socketpair(AF_UNIX, SOCK_STREAM, 0, socks[i].ptr));
+        check(socketpair(AF_UNIX, SOCK_STREAM, 0, socks[i].ptr[0..2]));
         //logf("socks[i] = %s", i, socks[i]);
     }
 
@@ -103,7 +103,7 @@ void main(string[] args) {
         auto a = socks[i][1];
         fiberPongPing(a, s1, s2);
     }
-    runUntilCompletion();
+    runFibers();
     //
     foreach(w; wrs) {
         w.join();

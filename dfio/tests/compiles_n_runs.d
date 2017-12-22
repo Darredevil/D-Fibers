@@ -4,7 +4,7 @@ import core.thread;
 import dfio;
 
 // run fibers until all of them terminate
-// void runUntilCompletion();
+// void runFibers();
 
 void main()
 {
@@ -12,11 +12,11 @@ void main()
 
     auto t1 = new Thread(() {
        //...
-       runUntilCompletion();
+       runFibers();
     });
     auto t2 = new Thread(() {
        //...
-       runUntilCompletion();
+       runFibers();
     });
     t1.start(); t2.start();
     t1.join();

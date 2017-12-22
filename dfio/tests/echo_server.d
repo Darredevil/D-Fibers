@@ -52,7 +52,11 @@ void client(string toSend) {
 
     // TODO timeout?
     char[1024] response;
-    size_t len = request.receive(response);
+    long len = 0;
+    while (len < 0) {
+        len = request.receive(response);
+    }
+
     logf("Received len = %d", len);
     auto received = response[0..len];
 
@@ -62,20 +66,7 @@ void client(string toSend) {
 }
 
 void main() {
-
     startloop();
-
-    //auto wr = new Thread(() => server());
-    //wr.start();
     spawn(() => server());
-
-    Thread.sleep( dur!("seconds")( 1 ) );
-    spawn(() => client("client 1\n"));
-    spawn(() => client("client 2\n"));
-    spawn(() => client("client 3\n"));
-    spawn(() => client("client 4\n"));
-
-
-    runUntilCompletion();
-    //wr.join();
+    runFibers();
 }
