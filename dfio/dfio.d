@@ -10,6 +10,7 @@ import core.thread;
 import std.container.dlist;
 import core.sys.posix.sys.types;
 import core.sys.posix.sys.socket;
+import core.sys.posix.netinet.in_;
 import core.sys.posix.unistd;
 import core.sys.linux.epoll;
 import core.sync.mutex;
@@ -284,20 +285,47 @@ extern(C) ssize_t sendto(int sockfd, const void *buf, size_t len, int flags,
     }
 }
 
+extern(C) ssize_t recv(int sockfd, const void *buf, size_t len, int flags)
+{
+    sockaddr_in src_addr;
+    src_addr.sin_family = AF_INET;
+    src_addr.sin_port = 0;
+    src_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    if (currentFiber is null) {
+        logf("RECV PASSTHROUGH!");
+        return cast(int)syscall(SYS_RECVFROM, sockfd,  cast(size_t) buf, len, flags,
+            cast(size_t) &src_addr, sockaddr_in.sizeof);
+    }
+    else {
+        logf("HOOKED RECV WITH MY LIB!"); // TODO: temporary for easy check, remove later
+        interceptFdNoFcntl(sockfd);
+        for(;;) {
+            ssize_t resp = syscall(SYS_RECVFROM, sockfd, cast(size_t) buf, len, MSG_DONTWAIT | flags,
+                cast(size_t) &src_addr, sockaddr_in.sizeof);
+            if (resp == -EWOULDBLOCK || resp == -EAGAIN) {
+                logf("RECV GOT DELAYED - sockfd %d, resp = %d", sockfd, resp);
+                reschedule(sockfd, currentFiber, EPOLLIN);
+                continue;
+            } else return cast(int)resp;
+        }
+        assert(0);
+    }
+}
+
 extern(C) ssize_t recvfrom(int sockfd, const void *buf, size_t len, int flags,
-                      const sockaddr *dest_addr, socklen_t addrlen)
+                      const sockaddr *src_addr, socklen_t addrlen)
 {
     if (currentFiber is null) {
         logf("RECEIVEFROM PASSTHROUGH!");
         return cast(int)syscall(SYS_RECVFROM, sockfd,  cast(size_t) buf, len, flags,
-                cast(size_t) dest_addr, addrlen);
+                cast(size_t) src_addr, addrlen);
     }
     else {
         logf("HOOKED RECEIVEFROM WITH MY LIB!"); // TODO: temporary for easy check, remove later
         interceptFdNoFcntl(sockfd);
         for(;;) {
             ssize_t resp = syscall(SYS_RECVFROM, sockfd, cast(size_t) buf, len, MSG_DONTWAIT | flags,
-                cast(size_t) dest_addr, addrlen);
+                cast(size_t) src_addr, addrlen);
             if (resp == -EWOULDBLOCK || resp == -EAGAIN) {
                 logf("RECEIVEFROM GOT DELAYED - sockfd %d, resp = %d", sockfd, resp);
                 reschedule(sockfd, currentFiber, EPOLLIN);

@@ -13,7 +13,11 @@ void server_worker(Socket client) {
 
     logf("Started server_worker, client = %s", client);
     auto received = client.receive(buffer);
-
+    if (received < 0) {
+        logf("Error %d", received);
+        perror("Error after reading from client");
+        abort();
+    }
     logf("Server_worker received:\n%s", buffer[0.. received]);
 
     enum header =
@@ -52,9 +56,10 @@ void client(string toSend) {
 
     // TODO timeout?
     char[1024] response;
-    long len = 0;
-    while (len < 0) {
-        len = request.receive(response);
+    long len = request.receive(response);
+    if (len < 0){
+        perror("Error while reading on client");
+        abort();
     }
 
     logf("Received len = %d", len);
