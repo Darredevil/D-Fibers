@@ -194,7 +194,14 @@ extern(C) ssize_t read(int fd, void *buf, size_t count)
                 logf("READ GOT DELAYED - FD %d, resp = %d", fd, resp);
                 reschedule(fd, currentFiber, EPOLLIN);
                 continue;
-            } else return resp;
+            }
+            else if(resp < 0) {
+                errno = cast(int)-resp;
+                return -1;
+            }
+            else {
+                return resp;
+            }
         }
         assert(0);
     }
@@ -225,7 +232,14 @@ extern(C) int accept(int sockfd, sockaddr *addr, socklen_t *addrlen)
                 logf("ACCEPT GOT DELAYED - sockfd %d, resp = %d", sockfd, resp);
                 reschedule(sockfd, currentFiber, EPOLLIN);
                 continue;
-            } else return cast(int)resp;
+            }
+            else if(resp < 0) {
+                errno = cast(int)-resp;
+                return -1;
+            }
+            else {
+                return cast(int)resp;
+            }
         }
         assert(0);
     }
@@ -256,7 +270,14 @@ extern(C) int connect(int sockfd, const sockaddr *addr, socklen_t addrlen)
                 logf("CONNECT GOT DELAYED - sockfd %d, resp = %d", sockfd, resp);
                 reschedule(sockfd, currentFiber, EPOLLIN);
                 continue;
-            } else return cast(int)resp;
+            }
+            else if(resp < 0) {
+                errno = cast(int)-resp;
+                return -1;
+            }
+            else {
+                return cast(int)resp;
+            }
         }
         assert(0);
     }
@@ -279,7 +300,14 @@ extern(C) ssize_t sendto(int sockfd, const void *buf, size_t len, int flags,
                 logf("SENDTO GOT DELAYED - sockfd %d, resp = %d", sockfd, resp);
                 reschedule(sockfd, currentFiber, EPOLLIN);
                 continue;
-            } else return cast(int)resp;
+            }
+            else if(resp < 0) {
+                errno = cast(int)-resp;
+                return -1;
+            }
+            else {
+                return resp;
+            }
         }
         assert(0);
     }
@@ -291,22 +319,30 @@ extern(C) ssize_t recv(int sockfd, const void *buf, size_t len, int flags)
     src_addr.sin_family = AF_INET;
     src_addr.sin_port = 0;
     src_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    size_t addrlen = sockaddr_in.sizeof;
     if (currentFiber is null) {
         logf("RECV PASSTHROUGH!");
         return cast(int)syscall(SYS_RECVFROM, sockfd,  cast(size_t) buf, len, flags,
-            cast(size_t) &src_addr, sockaddr_in.sizeof);
+            cast(size_t) &src_addr, cast(size_t)&addrlen);
     }
     else {
         logf("HOOKED RECV WITH MY LIB!"); // TODO: temporary for easy check, remove later
         interceptFdNoFcntl(sockfd);
         for(;;) {
             ssize_t resp = syscall(SYS_RECVFROM, sockfd, cast(size_t) buf, len, MSG_DONTWAIT | flags,
-                cast(size_t) &src_addr, sockaddr_in.sizeof);
+                cast(size_t) &src_addr, cast(size_t)&addrlen);
             if (resp == -EWOULDBLOCK || resp == -EAGAIN) {
                 logf("RECV GOT DELAYED - sockfd %d, resp = %d", sockfd, resp);
                 reschedule(sockfd, currentFiber, EPOLLIN);
                 continue;
-            } else return cast(int)resp;
+            }
+            else if(resp < 0) {
+                errno = cast(int)-resp;
+                return -1;
+            }
+            else {
+                return resp;
+            }
         }
         assert(0);
     }
@@ -330,7 +366,14 @@ extern(C) ssize_t recvfrom(int sockfd, const void *buf, size_t len, int flags,
                 logf("RECEIVEFROM GOT DELAYED - sockfd %d, resp = %d", sockfd, resp);
                 reschedule(sockfd, currentFiber, EPOLLIN);
                 continue;
-            } else return cast(int)resp;
+            }
+            else if(resp < 0) {
+                errno = cast(int)-resp;
+                return -1;
+            }
+            else {
+                return resp;
+            }
         }
         assert(0);
     }

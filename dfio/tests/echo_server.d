@@ -10,13 +10,16 @@ import dfio;
 
 void server_worker(Socket client) {
     char[1024] buffer;
-
+    scope(exit) {
+        client.shutdown(SocketShutdown.BOTH);
+        client.close();
+    }
     logf("Started server_worker, client = %s", client);
     auto received = client.receive(buffer);
     if (received < 0) {
         logf("Error %d", received);
         perror("Error after reading from client");
-        abort();
+        return;
     }
     logf("Server_worker received:\n%s", buffer[0.. received]);
 
@@ -25,9 +28,6 @@ void server_worker(Socket client) {
 
     string response = header ~ to!string(buffer[0..received]) ~ "\n";
     client.send(response);
-
-    client.shutdown(SocketShutdown.BOTH);
-    client.close();
 }
 
 void server() {
