@@ -462,6 +462,7 @@ struct DescriptorState {
 
 // intercept - a filter for file descriptor, changes flags and register on first use
 void interceptFd(int fd) {
+    if (fd < 0 || fd >= descriptors.length) return;
     if (descriptors[fd].firstUse) {
         logf("First use, registering fd = %d", fd);
         int flags = fcntl(fd, F_GETFL, 0);
@@ -480,6 +481,7 @@ void interceptFd(int fd) {
 }
 
 void interceptFdNoFcntl(int fd) {
+    if (fd < 0 || fd >= descriptors.length) return;
     if (descriptors[fd].firstUse) {
         epoll_event event;
         event.events = EPOLLIN | EPOLLOUT; // TODO: most events that make sense to watch for
@@ -490,7 +492,7 @@ void interceptFdNoFcntl(int fd) {
 }
 
 void deregisterFd(int fd) {
-    descriptors[fd].firstUse = true;
+    if(fd >= 0 && fd < descriptors.length) descriptors[fd].firstUse = true;
 }
 
 // reschedule - put fiber in a wait list, and get back to scheduling loop
@@ -508,9 +510,6 @@ void startloop()
     ssize_t fdMax = sysconf(_SC_OPEN_MAX).checked;
     descriptors = cast(shared)new DescriptorState[fdMax];
     queue = new shared BlockingQueue!Fiber;
-
-    /*auto io = new Thread(&eventloop, 64*1024);
-    io.start();*/
 }
 
 size_t processEvents()
