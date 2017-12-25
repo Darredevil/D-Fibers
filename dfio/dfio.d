@@ -22,9 +22,7 @@ import core.sys.posix.fcntl;
 
 Fiber currentFiber; // this is TLS per user thread
 
-shared int managedThreads = 0;
 shared int alive; // count of non-terminated Fibers
-shared bool completed = false;
 shared BlockingQueue!Fiber queue;
 shared Mutex mtx;
 
@@ -106,8 +104,31 @@ version (X86) {
         return ret;
     }
 } else version (X86_64) {
-    enum int SYS_READ = 0x0, SYS_WRITE = 0x1, SYS_SOCKETPAIR = 0x35, SYS_ACCEPT = 0x2b,
-        SYS_ACCEPT4 = 0x120, SYS_CONNECT = 0x2a, SYS_SENDTO = 0x2c, SYS_RECVFROM = 45;
+    enum int
+        SYS_READ = 0x0,
+        SYS_WRITE = 0x1,
+        SYS_CLOSE = 3,
+        SYS_SOCKETPAIR = 0x35,
+        SYS_ACCEPT = 0x2b,
+        SYS_ACCEPT4 = 0x120,
+        SYS_CONNECT = 0x2a,
+        SYS_SENDTO = 0x2c,
+        SYS_RECVFROM = 45;
+
+    size_t syscall(size_t ident, size_t n)
+    {
+        size_t ret;
+
+        asm
+        {
+            mov RAX, ident;
+            mov RDI, n[RBP];
+            syscall;
+            mov ret, RAX;
+        }
+        return ret;
+    }
+
     size_t syscall(size_t ident, size_t n, size_t arg1, size_t arg2)
     {
         size_t ret;
@@ -379,23 +400,44 @@ extern(C) ssize_t recvfrom(int sockfd, const void *buf, size_t len, int flags,
     }
 }
 
+extern(C) ssize_t close(int fd)
+{
+    logf("HOOKED CLOSE!");
+    deregisterFd(fd);
+    return cast(int)syscall(SYS_CLOSE, fd);
+}
 
 void runFibers()
 {
-    atomicOp!"+="(managedThreads, 1);
+    int counter = 0;
     while (alive > 0) {
         //currentFiber = take(queue); // TODO implement take
-
-        currentFiber = queue.pop();
-        logf("Fiber %x started", cast(void*)currentFiber);
-        currentFiber.call();
-        if (currentFiber.state == Fiber.State.TERM) {
-            logf("Fiber %s terminated", cast(void*)currentFiber);
-            atomicOp!"-="(alive, 1);
+        if (queue.tryPop(currentFiber)) {
+            logf("Fiber %x started", cast(void*)currentFiber);
+            currentFiber.call();
+            if (currentFiber.state == Fiber.State.TERM) {
+                logf("Fiber %s terminated", cast(void*)currentFiber);
+                atomicOp!"-="(alive, 1);
+            }
+        }
+        else {
+             // TODO: only one thread should process events at the same time
+             // should use tryLock pattern of sorts
+            if (processEvents() == 0) {
+                // TODO: wouldn't need to progressively sleep once we do edge-triggered eventloop
+                if (counter < 10) {
+                    counter += 1;
+                    Thread.yield();
+                }
+                else {
+                    Thread.sleep(1.msecs);
+                }
+            }
+            else {
+                counter = 0; 
+            }
         }
     }
-    atomicOp!"-="(managedThreads, 1);
-    completed = true;
 }
 
 void spawn(void delegate() func) {
@@ -420,7 +462,6 @@ struct DescriptorState {
 
 // intercept - a filter for file descriptor, changes flags and register on first use
 void interceptFd(int fd) {
-    
     if (descriptors[fd].firstUse) {
         logf("First use, registering fd = %d", fd);
         int flags = fcntl(fd, F_GETFL, 0);
@@ -439,7 +480,6 @@ void interceptFd(int fd) {
 }
 
 void interceptFdNoFcntl(int fd) {
-    int flags = fcntl(fd, F_GETFL, 0);
     if (descriptors[fd].firstUse) {
         epoll_event event;
         event.events = EPOLLIN | EPOLLOUT; // TODO: most events that make sense to watch for
@@ -447,6 +487,10 @@ void interceptFdNoFcntl(int fd) {
         epoll_ctl(event_loop_fd, EPOLL_CTL_ADD, fd, &event).checked("ERROR: failed epoll_ctl add!");
         descriptors[fd].firstUse = false;
     }
+}
+
+void deregisterFd(int fd) {
+    descriptors[fd].firstUse = true;
 }
 
 // reschedule - put fiber in a wait list, and get back to scheduling loop
@@ -465,44 +509,42 @@ void startloop()
     descriptors = cast(shared)new DescriptorState[fdMax];
     queue = new shared BlockingQueue!Fiber;
 
-    auto io = new Thread(&eventloop, 64*1024);
-    io.start();
+    /*auto io = new Thread(&eventloop, 64*1024);
+    io.start();*/
 }
 
-void eventloop()
+size_t processEvents()
 {
     epoll_event[MAX_EVENTS] events;
-    while(!completed || managedThreads > 0) {
-        int r = epoll_wait(event_loop_fd, events.ptr, MAX_EVENTS, TIMEOUT)
-            .checked("ERROR: failed epoll_wait");
-        //debug stderr.writefln("Passed epoll_wait, r = %d", r);
+    int r = epoll_wait(event_loop_fd, events.ptr, MAX_EVENTS, TIMEOUT)
+        .checked("ERROR: failed epoll_wait");
+    //debug stderr.writefln("Passed epoll_wait, r = %d", r);
+    size_t unblocked = 0;
+    for (int n = 0; n < r; n++) {
+        int fd = events[n].data.fd;
+        mtx.lock();
+        auto w = descriptors[fd].waiters;
 
-        for (int n = 0; n < r; n++) {
-            int fd = events[n].data.fd;
-            mtx.lock();
-            auto w = descriptors[fd].waiters;
-
-            //TODO: remove the ones from the waiting list
-            size_t j = 0;
-            for (size_t i = 0; i<w.length;) {
-                auto a = w[i];
-                //stderr.writefln("Event %s on fd=%s op=%s waiter=%s", events[n].events, events[n].data.fd, a.op, cast(void*)a.fiber);
-                // 3. the trick is read and write are separate, and then there are TODO: exceptions (errors)
-                if ((a.op & events[n].events) != 0) {
-                    logf("EVENT ON %d", fd);
-                    queue.push(cast(Fiber)(a.fiber));
-                    i++;
-                }
-                else {
-                    w[j] = w[i];
-                    j++;
-                    i++;
-                }
+        //TODO: remove the ones from the waiting list
+        size_t j = 0;
+        for (size_t i = 0; i<w.length;) {
+            auto a = w[i];
+            //stderr.writefln("Event %s on fd=%s op=%s waiter=%s", events[n].events, events[n].data.fd, a.op, cast(void*)a.fiber);
+            // 3. the trick is read and write are separate, and then there are TODO: exceptions (errors)
+            if ((a.op & events[n].events) != 0) {
+                logf("EVENT ON %d", fd);
+                queue.push(cast(Fiber)(a.fiber));
+                unblocked += 1;
+                i++;
             }
-            descriptors[fd].waiters = w[0..j];
-            mtx.unlock();
-            Thread.yield();
+            else {
+                w[j] = w[i];
+                j++;
+                i++;
+            }
         }
+        descriptors[fd].waiters = w[0..j];
+        mtx.unlock();
     }
-    logf("Exited event loop!");
+    return unblocked;
 }
