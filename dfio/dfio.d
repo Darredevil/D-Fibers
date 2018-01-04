@@ -33,7 +33,8 @@ enum int MSG_DONTWAIT = 0x40;
 
 void logf(string file = __FILE__, int line = __LINE__, T...)(string msg, T args)
 {
-    version(none) stderr.writefln("%s:%s:[LWP:%s]\t", file, line, Thread.getThis.id);
+    //version(none) stderr.writefln("%s:%s:[LWP:%s]\t", file, line, Thread.getThis.id);
+    stderr.writefln("%s:%s:[LWP:%s]\t%s", file, line, Thread.getThis.id, format(msg, args));
 }
 
 int checked(int value, const char* msg="unknown place") {
@@ -435,7 +436,7 @@ void runFibers()
                 }
             }
             else {
-                counter = 0; 
+                counter = 0;
             }
         }
     }

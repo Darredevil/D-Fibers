@@ -5,29 +5,55 @@ import core.thread;
 import std.string;
 
 import dfio;
+import http.parser.core;
 // curl -d "value=test"  -X POST localhost:1337
+// curl -v localhost:1337 -H 'Connection: close'
+// curl -v localhost:1337 -H 'Connection: keep-alive'
 
 
 void server_worker(Socket client) {
     char[1024] buffer;
+    auto parser = new HttpParser();
+    HttpVersion v;
+
     scope(exit) {
         client.shutdown(SocketShutdown.BOTH);
         client.close();
     }
+
     logf("Started server_worker, client = %s", client);
-    auto received = client.receive(buffer);
-    if (received < 0) {
-        logf("Error %d", received);
-        perror("Error while reading from client");
-        return;
-    }
-    logf("Server_worker received:\n%s", buffer[0.. received]);
+    bool keepAlive = true; // default for HTTP 1.1
+    do {
+        auto received = client.receive(buffer);
+        logf("Is socket blocking? %s", client.blocking); // just a hunch
+        if (received < 0) {
+            logf("Error %d", received);
+            perror("Error while reading from client");
+            return;
+        }
+        logf("Server_worker received:\n<%s>", buffer[0.. received]);
 
-    enum header =
-        "HTTP/1.0 200 OK\nContent-Type: text/html; charset=utf-8\n\n";
+        //enum header = "HTTP/1.0 200 OK\nContent-Type: text/html; charset=utf-8\n\n";
 
-    string response = header ~ to!string(buffer[0..received]) ~ "\n";
-    client.send(response);
+        parser.onBody = (parser, HttpBodyChunk data) {
+            client.send(data.buffer);
+        };
+
+        parser.onHeader = (parser, HttpHeader header) {
+            logf("Parser Header <%s> with value <%s>", header.name, header.value);
+            if (header.name.toLower == "connection" && header.value.toLower == "close")
+                keepAlive = false;
+        };
+
+        parser.execute(to!string(buffer[0..received]));
+        v = parser.protocolVersion();
+        logf("Protocol version = %s", v);
+        if (v.toString == "1.0")
+            keepAlive = false;
+
+        //string response = header ~ to!string(buffer[0..received]) ~ "\n";
+        //client.send(response);
+    } while(keepAlive);
 }
 
 void server() {
