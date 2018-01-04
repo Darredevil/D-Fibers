@@ -18,7 +18,7 @@ void server_worker(Socket client) {
     auto received = client.receive(buffer);
     if (received < 0) {
         logf("Error %d", received);
-        perror("Error after reading from client");
+        perror("Error while reading from client");
         return;
     }
     logf("Server_worker received:\n%s", buffer[0.. received]);
