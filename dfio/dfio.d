@@ -19,6 +19,7 @@ import core.atomic;
 import BlockingQueue : BlockingQueue, unshared;
 import core.sys.posix.stdlib: abort;
 import core.sys.posix.fcntl;
+import core.memory;
 
 Fiber currentFiber; // this is TLS per user thread
 
@@ -32,7 +33,7 @@ enum int MSG_DONTWAIT = 0x40;
 
 void logf(string file = __FILE__, int line = __LINE__, T...)(string msg, T args)
 {
-    stderr.writefln("%s:%s:[LWP:%s]\t%s", file, line, Thread.getThis.id, format(msg, args));
+    version(none) stderr.writefln("%s:%s:[LWP:%s]\t", file, line, Thread.getThis.id);
 }
 
 int checked(int value, const char* msg="unknown place") {
