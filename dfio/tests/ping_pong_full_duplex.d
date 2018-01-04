@@ -68,7 +68,7 @@ void main() {
 
     // spawn fiber to read stuff
     spawn(() => readerWriter(socks1[1], socks2[1]));
-    runUntilCompletion();
+    runFibers();
     //
     wr.join();
 }

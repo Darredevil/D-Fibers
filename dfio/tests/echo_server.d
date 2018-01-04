@@ -10,10 +10,17 @@ import dfio;
 
 void server_worker(Socket client) {
     char[1024] buffer;
-
+    scope(exit) {
+        client.shutdown(SocketShutdown.BOTH);
+        client.close();
+    }
     logf("Started server_worker, client = %s", client);
     auto received = client.receive(buffer);
-
+    if (received < 0) {
+        logf("Error %d", received);
+        perror("Error after reading from client");
+        return;
+    }
     logf("Server_worker received:\n%s", buffer[0.. received]);
 
     enum header =
@@ -21,9 +28,6 @@ void server_worker(Socket client) {
 
     string response = header ~ to!string(buffer[0..received]) ~ "\n";
     client.send(response);
-
-    client.shutdown(SocketShutdown.BOTH);
-    client.close();
 }
 
 void server() {
@@ -52,7 +56,12 @@ void client(string toSend) {
 
     // TODO timeout?
     char[1024] response;
-    size_t len = request.receive(response);
+    long len = request.receive(response);
+    if (len < 0){
+        perror("Error while reading on client");
+        abort();
+    }
+
     logf("Received len = %d", len);
     auto received = response[0..len];
 
@@ -62,20 +71,7 @@ void client(string toSend) {
 }
 
 void main() {
-
     startloop();
-
-    //auto wr = new Thread(() => server());
-    //wr.start();
     spawn(() => server());
-
-    Thread.sleep( dur!("seconds")( 1 ) );
-    spawn(() => client("client 1\n"));
-    spawn(() => client("client 2\n"));
-    spawn(() => client("client 3\n"));
-    spawn(() => client("client 4\n"));
-
-
-    runUntilCompletion();
-    //wr.join();
+    runFibers();
 }

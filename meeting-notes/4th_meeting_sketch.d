@@ -42,7 +42,7 @@ void main() {
 
    // spawn fiber to read stuff
    spawn(() => reader(socks[1]));
-   runUntilCompletion();
+   runFibers();
    //
    wr.join();
 }
@@ -57,7 +57,7 @@ void main() {
    wr.start();
    // spawn fiber to read stuff
    spawn(() => reader(socks[1]));
-   runUntilCompletion(); // this we should get rid off eventually too
+   runFibers(); // this we should get rid off eventually too
    //
    wr.join();
 }
@@ -69,7 +69,7 @@ void main() {
    check(socketpair(AF_UNIX, SOCK_STREAM, 0, socks));
    spawn(() => writer(socks[0]));
    spawn(() => reader(socks[1]));
-   runUntilCompletion(); // this we should get rid off eventually too
+   runFibers(); // this we should get rid off eventually too
 }
 
 // The last problem is managing multiple threads with Fibers
@@ -90,6 +90,6 @@ void main(){
     foreach(_; 0..8)
         new Thread(() => {
             spawn(server);
-            runUntilCompletion();
+            runFibers();
         }).start();
 }

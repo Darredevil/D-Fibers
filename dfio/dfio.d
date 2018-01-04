@@ -10,6 +10,7 @@ import core.thread;
 import std.container.dlist;
 import core.sys.posix.sys.types;
 import core.sys.posix.sys.socket;
+import core.sys.posix.netinet.in_;
 import core.sys.posix.unistd;
 import core.sys.linux.epoll;
 import core.sync.mutex;
@@ -28,6 +29,8 @@ shared BlockingQueue!Fiber queue;
 shared Mutex mtx;
 
 enum int TIMEOUT = 1, MAX_EVENTS = 100;
+
+enum int MSG_DONTWAIT = 0x40;
 
 void logf(string file = __FILE__, int line = __LINE__, T...)(string msg, T args)
 {
@@ -104,7 +107,7 @@ version (X86) {
     }
 } else version (X86_64) {
     enum int SYS_READ = 0x0, SYS_WRITE = 0x1, SYS_SOCKETPAIR = 0x35, SYS_ACCEPT = 0x2b,
-        SYS_ACCEPT4 = 0x120, SYS_CONNECT = 0x2a, SYS_SENDTO = 0x2c;
+        SYS_ACCEPT4 = 0x120, SYS_CONNECT = 0x2a, SYS_SENDTO = 0x2c, SYS_RECVFROM = 45;
     size_t syscall(size_t ident, size_t n, size_t arg1, size_t arg2)
     {
         size_t ret;
@@ -157,7 +160,7 @@ version (X86) {
     }
 
     size_t syscall(size_t ident, size_t n, size_t arg1, size_t arg2, size_t arg3, size_t arg4, size_t arg5)
-{
+    {
         size_t ret;
 
         asm
@@ -173,7 +176,7 @@ version (X86) {
             mov ret, RAX;
         }
         return ret;
-}
+    }
 }
 
 extern(C) ssize_t read(int fd, void *buf, size_t count)
@@ -184,25 +187,21 @@ extern(C) ssize_t read(int fd, void *buf, size_t count)
     }
     else {
         logf("HOOKED READ WITH MY LIB!"); // TODO: temporary for easy check, remove later
-        if (descriptors[fd].firstUse) {
-            logf("First use, registering fd = %d", fd);
-            fcntl(fd, F_SETFL, O_NONBLOCK).checked;
-            event_add_fd(fd);
-            descriptors[fd].firstUse = false;
-        }
-        int flags = fcntl(fd, F_GETFL, 0);
-        if (!(flags & O_NONBLOCK)) {
-            logf("WARNING: Socket (%d) not set in O_NONBLOCK mode!", fd);
-            //abort(); //TODO: enforce abort?
-        }
+        interceptFd(fd);
         for(;;) {
             ssize_t resp = syscall(SYS_READ, fd, cast(ssize_t) buf, cast(ssize_t) count);
             if (resp == -EWOULDBLOCK || resp == -EAGAIN) {
                 logf("READ GOT DELAYED - FD %d, resp = %d", fd, resp);
-                add_await(fd, currentFiber, EPOLLIN);
-                Fiber.yield();
+                reschedule(fd, currentFiber, EPOLLIN);
                 continue;
-            } else return resp;
+            }
+            else if(resp < 0) {
+                errno = cast(int)-resp;
+                return -1;
+            }
+            else {
+                return resp;
+            }
         }
         assert(0);
     }
@@ -218,45 +217,29 @@ extern(C) ssize_t write(int fd, const void *buf, size_t count)
     return cast(int) ret;
 }
 
-extern(C) int socketpair(int domain, int type, int protocol, int* sv)
-{
-    logf("HOOKED SOCKETPAIR WITH MY LIB!"); // TODO: temporary for easy check, remove later
-
-    ssize_t ret = syscall(SYS_SOCKETPAIR, domain, type, protocol, cast(size_t) sv);
-    if (ret < 0)
-        abort();
-    return cast(int) ret;
-}
-
 extern(C) int accept(int sockfd, sockaddr *addr, socklen_t *addrlen)
 {
-    //logf("HOOKED ACCEPT WITH MY LIB!"); // TODO: temporary for easy check, remove later
-
     if (currentFiber is null) {
         logf("ACCEPT PASSTHROUGH!");
         return cast(int)syscall(SYS_ACCEPT, sockfd, cast(size_t) addr, cast(size_t) addrlen);
     }
     else {
         logf("HOOKED ACCEPT WITH MY LIB!"); // TODO: temporary for easy check, remove later
-        if (descriptors[sockfd].firstUse) {
-            logf("First use, registering sockfd = %d", sockfd);
-            fcntl(sockfd, F_SETFL, O_NONBLOCK).checked;
-            event_add_fd(sockfd);
-            descriptors[sockfd].firstUse = false;
-        }
-        int flags = fcntl(sockfd, F_GETFL, 0);
-        if (!(flags & O_NONBLOCK)) {
-            logf("WARNING: Socket (%d) not set in O_NONBLOCK mode!", sockfd);
-            //abort(); //TODO: enforce abort?
-        }
+        interceptFd(sockfd);
         for(;;) {
             ssize_t resp = syscall(SYS_ACCEPT, sockfd, cast(size_t) addr, cast(size_t) addrlen);
-            if (/*resp == -EWOULDBLOCK ||*/ resp == -EAGAIN) {
+            if (resp == -EWOULDBLOCK || resp == -EAGAIN) {
                 logf("ACCEPT GOT DELAYED - sockfd %d, resp = %d", sockfd, resp);
-                add_await(sockfd, currentFiber, EPOLLIN);
-                Fiber.yield();
+                reschedule(sockfd, currentFiber, EPOLLIN);
                 continue;
-            } else return cast(int)resp;
+            }
+            else if(resp < 0) {
+                errno = cast(int)-resp;
+                return -1;
+            }
+            else {
+                return cast(int)resp;
+            }
         }
         assert(0);
     }
@@ -280,25 +263,21 @@ extern(C) int connect(int sockfd, const sockaddr *addr, socklen_t addrlen)
     }
     else {
         logf("HOOKED CONNECT WITH MY LIB!"); // TODO: temporary for easy check, remove later
-        if (descriptors[sockfd].firstUse) {
-            logf("First use, registering sockfd = %d", sockfd);
-            fcntl(sockfd, F_SETFL, O_NONBLOCK).checked;
-            event_add_fd(sockfd);
-            descriptors[sockfd].firstUse = false;
-        }
-        int flags = fcntl(sockfd, F_GETFL, 0);
-        if (!(flags & O_NONBLOCK)) {
-            logf("WARNING: Socket (%d) not set in O_NONBLOCK mode!", sockfd);
-            //abort(); //TODO: enforce abort?
-        }
+        interceptFd(sockfd);
         for(;;) {
             ssize_t resp = syscall(SYS_CONNECT, sockfd, cast(size_t) addr, cast(size_t) addrlen);
-            if (/*resp == -EWOULDBLOCK ||*/ resp == -EAGAIN) {
+            if (resp == -EWOULDBLOCK || resp == -EAGAIN) {
                 logf("CONNECT GOT DELAYED - sockfd %d, resp = %d", sockfd, resp);
-                add_await(sockfd, currentFiber, EPOLLIN);
-                Fiber.yield();
+                reschedule(sockfd, currentFiber, EPOLLIN);
                 continue;
-            } else return cast(int)resp;
+            }
+            else if(resp < 0) {
+                errno = cast(int)-resp;
+                return -1;
+            }
+            else {
+                return cast(int)resp;
+            }
         }
         assert(0);
     }
@@ -307,17 +286,101 @@ extern(C) int connect(int sockfd, const sockaddr *addr, socklen_t addrlen)
 extern(C) ssize_t sendto(int sockfd, const void *buf, size_t len, int flags,
                       const sockaddr *dest_addr, socklen_t addrlen)
 {
-    logf("HOOKED SENDTO WITH MY LIB!"); // TODO: temporary for easy check, remove later
+    if (currentFiber is null) {
+        logf("SENDTO PASSTHROUGH!");
+        return cast(int)syscall(SYS_SENDTO, sockfd, cast(size_t) dest_addr, cast(size_t) addrlen);
+    }
+    else {
+        logf("HOOKED SENDTO WITH MY LIB!"); // TODO: temporary for easy check, remove later
+        interceptFdNoFcntl(sockfd);
+        for(;;) {
+            ssize_t resp = syscall(SYS_SENDTO, sockfd, cast(size_t) buf, len, MSG_DONTWAIT | flags,
+                cast(size_t) dest_addr, addrlen);
+            if (resp == -EWOULDBLOCK || resp == -EAGAIN) {
+                logf("SENDTO GOT DELAYED - sockfd %d, resp = %d", sockfd, resp);
+                reschedule(sockfd, currentFiber, EPOLLIN);
+                continue;
+            }
+            else if(resp < 0) {
+                errno = cast(int)-resp;
+                return -1;
+            }
+            else {
+                return resp;
+            }
+        }
+        assert(0);
+    }
+}
 
-    ssize_t ret = syscall(SYS_SENDTO, sockfd, cast(size_t) buf, len, flags,
-        cast(size_t) dest_addr, /*cast(size_t)*/ addrlen);
-    if (ret < 0)
-        abort();
-    return cast(int) ret;
+extern(C) ssize_t recv(int sockfd, const void *buf, size_t len, int flags)
+{
+    sockaddr_in src_addr;
+    src_addr.sin_family = AF_INET;
+    src_addr.sin_port = 0;
+    src_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    size_t addrlen = sockaddr_in.sizeof;
+    if (currentFiber is null) {
+        logf("RECV PASSTHROUGH!");
+        return cast(int)syscall(SYS_RECVFROM, sockfd,  cast(size_t) buf, len, flags,
+            cast(size_t) &src_addr, cast(size_t)&addrlen);
+    }
+    else {
+        logf("HOOKED RECV WITH MY LIB!"); // TODO: temporary for easy check, remove later
+        interceptFdNoFcntl(sockfd);
+        for(;;) {
+            ssize_t resp = syscall(SYS_RECVFROM, sockfd, cast(size_t) buf, len, MSG_DONTWAIT | flags,
+                cast(size_t) &src_addr, cast(size_t)&addrlen);
+            if (resp == -EWOULDBLOCK || resp == -EAGAIN) {
+                logf("RECV GOT DELAYED - sockfd %d, resp = %d", sockfd, resp);
+                reschedule(sockfd, currentFiber, EPOLLIN);
+                continue;
+            }
+            else if(resp < 0) {
+                errno = cast(int)-resp;
+                return -1;
+            }
+            else {
+                return resp;
+            }
+        }
+        assert(0);
+    }
+}
+
+extern(C) ssize_t recvfrom(int sockfd, const void *buf, size_t len, int flags,
+                      const sockaddr *src_addr, socklen_t addrlen)
+{
+    if (currentFiber is null) {
+        logf("RECEIVEFROM PASSTHROUGH!");
+        return cast(int)syscall(SYS_RECVFROM, sockfd,  cast(size_t) buf, len, flags,
+                cast(size_t) src_addr, addrlen);
+    }
+    else {
+        logf("HOOKED RECEIVEFROM WITH MY LIB!"); // TODO: temporary for easy check, remove later
+        interceptFdNoFcntl(sockfd);
+        for(;;) {
+            ssize_t resp = syscall(SYS_RECVFROM, sockfd, cast(size_t) buf, len, MSG_DONTWAIT | flags,
+                cast(size_t) src_addr, addrlen);
+            if (resp == -EWOULDBLOCK || resp == -EAGAIN) {
+                logf("RECEIVEFROM GOT DELAYED - sockfd %d, resp = %d", sockfd, resp);
+                reschedule(sockfd, currentFiber, EPOLLIN);
+                continue;
+            }
+            else if(resp < 0) {
+                errno = cast(int)-resp;
+                return -1;
+            }
+            else {
+                return resp;
+            }
+        }
+        assert(0);
+    }
 }
 
 
-void runUntilCompletion()
+void runFibers()
 {
     atomicOp!"+="(managedThreads, 1);
     while (alive > 0) {
@@ -355,21 +418,43 @@ struct DescriptorState {
     bool firstUse = true;
 }
 
-void add_await(int fd, Fiber fiber, int op) {
+// intercept - a filter for file descriptor, changes flags and register on first use
+void interceptFd(int fd) {
+    
+    if (descriptors[fd].firstUse) {
+        logf("First use, registering fd = %d", fd);
+        int flags = fcntl(fd, F_GETFL, 0);
+        fcntl(fd, F_SETFL, flags | O_NONBLOCK).checked;
+        epoll_event event;
+        event.events = EPOLLIN | EPOLLOUT; // TODO: most events that make sense to watch for
+        event.data.fd = fd;
+        epoll_ctl(event_loop_fd, EPOLL_CTL_ADD, fd, &event).checked("ERROR: failed epoll_ctl add!");
+        descriptors[fd].firstUse = false;
+    }
+    int flags = fcntl(fd, F_GETFL, 0);
+    if (!(flags & O_NONBLOCK)) {
+        logf("WARNING: Socket (%d) not set in O_NONBLOCK mode!", fd);
+        //abort(); //TODO: enforce abort?
+    }
+}
+
+void interceptFdNoFcntl(int fd) {
+    int flags = fcntl(fd, F_GETFL, 0);
+    if (descriptors[fd].firstUse) {
+        epoll_event event;
+        event.events = EPOLLIN | EPOLLOUT; // TODO: most events that make sense to watch for
+        event.data.fd = fd;
+        epoll_ctl(event_loop_fd, EPOLL_CTL_ADD, fd, &event).checked("ERROR: failed epoll_ctl add!");
+        descriptors[fd].firstUse = false;
+    }
+}
+
+// reschedule - put fiber in a wait list, and get back to scheduling loop
+void reschedule(int fd, Fiber fiber, int op) {
     mtx.lock();
     (cast(DescriptorState[])descriptors)[fd].waiters ~= AwaitingFiber(currentFiber, op);
     mtx.unlock();
-}
-
-void event_add_fd(int fd) { // register new FD
-    epoll_event event;
-    event.events = EPOLLIN | EPOLLOUT; // TODO: most events that make sense to watch for
-    event.data.fd = fd;
-    epoll_ctl(event_loop_fd, EPOLL_CTL_ADD, fd, &event).checked("ERROR: failed epoll_ctl add!");
-}
-
-void event_remove_fd(int fd) { // TODO: on LibC's close
-    epoll_ctl(event_loop_fd, EPOLL_CTL_DEL, fd, null).checked("ERROR: failed epoll_ctl delete!");
+    Fiber.yield();
 }
 
 void startloop()
