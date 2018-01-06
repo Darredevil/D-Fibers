@@ -436,7 +436,7 @@ void runFibers()
                 }
             }
             else {
-                counter = 0; 
+                counter = 0;
             }
         }
     }
