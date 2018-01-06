@@ -60,7 +60,7 @@ void server() {
     Socket server = new TcpSocket();
     server.setOption(SocketOptionLevel.SOCKET, SocketOption.REUSEADDR, true);
     server.bind(new InternetAddress("localhost", 1337));
-    server.listen(1);
+    server.listen(1000);
 
     logf("Started server");
 
