@@ -33,8 +33,8 @@ enum int MSG_DONTWAIT = 0x40;
 
 void logf(string file = __FILE__, int line = __LINE__, T...)(string msg, T args)
 {
-    //version(none) stderr.writefln("%s:%s:[LWP:%s]\t", file, line, Thread.getThis.id);
-    stderr.writefln("%s:%s:[LWP:%s]\t%s", file, line, Thread.getThis.id, format(msg, args));
+    debug stderr.writefln(msg, args);
+    debug stderr.writefln("\tat %s:%s:[LWP:%s]", file, line, Thread.getThis.id);
 }
 
 int checked(int value, const char* msg="unknown place") {
@@ -232,7 +232,7 @@ extern(C) ssize_t read(int fd, void *buf, size_t count)
 
 extern(C) ssize_t write(int fd, const void *buf, size_t count)
 {
-    logf("HOOKED WRITE WITH MY LIB!"); // TODO: temporary for easy check, remove later
+    logf("HOOKED WRITE FD=%d!", fd);
 
     ssize_t ret = syscall(SYS_WRITE, fd, cast(size_t) buf, count);
     if (ret < 0)
@@ -243,11 +243,11 @@ extern(C) ssize_t write(int fd, const void *buf, size_t count)
 extern(C) int accept(int sockfd, sockaddr *addr, socklen_t *addrlen)
 {
     if (currentFiber is null) {
-        logf("ACCEPT PASSTHROUGH!");
+        logf("ACCEPT PASSTHROUGH FD=%d", sockfd);
         return cast(int)syscall(SYS_ACCEPT, sockfd, cast(size_t) addr, cast(size_t) addrlen);
     }
     else {
-        logf("HOOKED ACCEPT WITH MY LIB!"); // TODO: temporary for easy check, remove later
+        logf("HOOKED ACCEPT FD=%d", sockfd); // TODO: temporary for easy check, remove later
         interceptFd(sockfd);
         for(;;) {
             ssize_t resp = syscall(SYS_ACCEPT, sockfd, cast(size_t) addr, cast(size_t) addrlen);
@@ -344,12 +344,12 @@ extern(C) ssize_t recv(int sockfd, const void *buf, size_t len, int flags)
     src_addr.sin_addr.s_addr = htonl(INADDR_ANY);
     size_t addrlen = sockaddr_in.sizeof;
     if (currentFiber is null) {
-        logf("RECV PASSTHROUGH!");
+        logf("RECV PASSTHROUGH FD=%d !", sockfd);
         return cast(int)syscall(SYS_RECVFROM, sockfd,  cast(size_t) buf, len, flags,
             cast(size_t) &src_addr, cast(size_t)&addrlen);
     }
     else {
-        logf("HOOKED RECV WITH MY LIB!"); // TODO: temporary for easy check, remove later
+        logf("HOOKED RECV FD=%d", sockfd);
         interceptFdNoFcntl(sockfd);
         for(;;) {
             ssize_t resp = syscall(SYS_RECVFROM, sockfd, cast(size_t) buf, len, MSG_DONTWAIT | flags,

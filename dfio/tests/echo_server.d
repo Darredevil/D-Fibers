@@ -64,12 +64,15 @@ void server() {
 
     logf("Started server");
 
+    void processClient(Socket client) {
+        spawn(() => server_worker(client));
+    }
+
     while(true) {
         logf("Waiting for server.accept()");
         Socket client = server.accept();
         logf("New client accepted %s", client);
-
-        spawn(() => server_worker(client));
+        processClient(client);
     }
 }
 
