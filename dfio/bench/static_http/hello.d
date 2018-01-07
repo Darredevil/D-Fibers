@@ -1,5 +1,6 @@
 import std.algorithm;
 import std.conv;
+import std.datetime;
 import std.format;
 import std.range;
 import std.stdio;
@@ -9,6 +10,45 @@ import core.thread;
 
 import dfio;
 import http.parser.core;
+
+string dayAsString(DayOfWeek day) {
+    final switch(day) with(DayOfWeek) {
+        case mon: return "Mon";
+        case tue: return "Tue";
+        case wed: return "Wed";
+        case thu: return "Thu";
+        case fri: return "Fri";
+        case sat: return "Sat";
+        case sun: return "Sun";
+    }
+}
+
+string monthAsString(Month month){
+    final switch(month) with (Month) {
+        case jan: return "Jan";
+        case feb: return "Feb";
+        case mar: return "Mar";
+        case apr: return "Apr";
+        case may: return "May";
+        case jun: return "Jun";
+        case jul: return "Jul";
+        case aug: return "Aug";
+        case sep: return "Sep";
+        case oct: return "Oct";
+        case nov: return "Nov";
+        case dec: return "Dec";
+    }
+}
+
+void writeDate(Output, D)(ref Output sink, D date){
+    string weekDay = dayAsString(date.dayOfWeek);
+    string month = monthAsString(date.month);
+    formattedWrite(sink, 
+        "Date: %s, %02s %s %04s %02s:%02s:%02s GMT\r\n", 
+        weekDay, date.day, month, date.year,
+        date.hour, date.minute, date.second
+    );
+}
 
 void server_worker(Socket client) {
     ubyte[1024] buffer;
@@ -21,12 +61,10 @@ void server_worker(Socket client) {
     auto bodyBuf = appender!(char[]);
     bool keepAlive = false;
     logf("Started server_worker, client = %s", client);
-    
     do {
         scope parser = new HttpParser();    
         bool reading = true;
         int connection = -1;
-        bodyBuf.clear();
         parser.onMessageComplete = (parser) {
             reading = false;
         };
@@ -46,7 +84,7 @@ void server_worker(Socket client) {
                 return;
             }
             else if (received == 0) { //socket is closed (eof)
-                keepAlive = false;
+                connection = 0;
                 reading = false;
             }
             else {
@@ -58,21 +96,24 @@ void server_worker(Socket client) {
         // if no connection header present, keep connection for 1.1
         if (connection == 1) keepAlive = true;
         else if (connection < 0 && v.major == 1 && v.minor == 1) keepAlive = true;
+        else keepAlive = false;
         logf("Protocol version = %s", v);
         outBuf.clear();
         bodyBuf.clear();
         formattedWrite(bodyBuf, "Hello, world!");
+        auto date = Clock.currTime!(ClockType.coarse)(UTC());
+        formattedWrite(outBuf,
+            "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: %d\r\n", 
+            bodyBuf.data.length
+        );
+        writeDate(outBuf, date);
         if (keepAlive) {
             logf("Keep-alive request");
-            formattedWrite(outBuf, 
-                "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nConnection: keep-alive\r\nContent-Length: %d\r\n\r\n",
-                bodyBuf.data.length);        
+            formattedWrite(outBuf, "Connection: keep-alive\r\n\r\n");
         }
         else {
             logf("Non keep-alive request");
-            formattedWrite(outBuf, 
-                "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: %d\r\n\r\n",
-                bodyBuf.data.length);
+            formattedWrite(outBuf, "\r\n");
         }
         copy(bodyBuf.data, outBuf);
         logf("Sent <%s>", cast(char[])outBuf.data);
