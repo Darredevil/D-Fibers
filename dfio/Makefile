@@ -1,12 +1,21 @@
+DFLAGS=-O -release -inline
+export DFLAGS
+
 build-tests: libdfio.so BlockingQueue.o
-	cd tests && make
+	$(MAKE) -C tests
+
+bench: libdfio.so BlockingQueue.o
+	$(MAKE) -C bench
+
+simple-bench: libdfio.so BlockingQueue.o
+	$(MAKE) -C bench simple-bench
 
 BlockingQueue.o:
-	dmd -c -g BlockingQueue.d
+	dmd $(DFLAGS) -c BlockingQueue.d
 
 libdfio.so: dfio.d
-	dmd -c -g dfio.d -fPIC
-	dmd -g -oflibdfio.so dfio.o -shared -L-rpath=dfio
+	dmd $(DFLAGS) -c dfio.d -fPIC
+	dmd $(DFLAGS) -oflibdfio.so dfio.o -shared -L-rpath=dfio
 	cp libdfio.so tests/
 
 test-all: build-tests
@@ -14,9 +23,6 @@ test-all: build-tests
 	cd tests && ./ping_pong_fiber_half_duplex
 	cd tests && ./ping_pong_thread_half_duplex
 	cd tests && ./ping_pong_full_duplex
-#	cd tests && ./ping_pong_full_duplex_4
-#	 cd tests && ./ping_pong_full_duplex_8
-#	cd tests && ./ping_pong_full_duplex_20
 
 test-compiles_n_runs: build-tests
 	cd tests && ./compiles_n_runs
@@ -47,4 +53,5 @@ test-echo_sever: build-tests
 
 clean:
 	cd tests && make clean
+	cd bench && make clean
 	rm -f *.o *.so main

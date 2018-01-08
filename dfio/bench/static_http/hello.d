@@ -43,8 +43,8 @@ string monthAsString(Month month){
 void writeDate(Output, D)(ref Output sink, D date){
     string weekDay = dayAsString(date.dayOfWeek);
     string month = monthAsString(date.month);
-    formattedWrite(sink, 
-        "Date: %s, %02s %s %04s %02s:%02s:%02s GMT\r\n", 
+    formattedWrite(sink,
+        "Date: %s, %02s %s %04s %02s:%02s:%02s GMT\r\n",
         weekDay, date.day, month, date.year,
         date.hour, date.minute, date.second
     );
@@ -52,7 +52,7 @@ void writeDate(Output, D)(ref Output sink, D date){
 
 void server_worker(Socket client) {
     ubyte[1024] buffer;
-    
+
     scope(exit) {
         client.shutdown(SocketShutdown.BOTH);
         client.close();
@@ -62,7 +62,7 @@ void server_worker(Socket client) {
     bool keepAlive = false;
     logf("Started server_worker, client = %s", client);
     do {
-        scope parser = new HttpParser();    
+        scope parser = new HttpParser();
         bool reading = true;
         int connection = -1;
         parser.onMessageComplete = (parser) {
@@ -73,10 +73,10 @@ void server_worker(Socket client) {
             if (header.name.toLower == "connection")
                 if (header.value.toLower == "close")
                     connection = 0;
-                else 
+                else
                     connection = 1;
         };
-        while(reading){            
+        while(reading){
             ptrdiff_t received = client.receive(buffer);
             if (received < 0) {
                 logf("Error %d", received);
@@ -103,7 +103,7 @@ void server_worker(Socket client) {
         formattedWrite(bodyBuf, "Hello, world!");
         auto date = Clock.currTime!(ClockType.coarse)(UTC());
         formattedWrite(outBuf,
-            "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: %d\r\n", 
+            "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: %d\r\n",
             bodyBuf.data.length
         );
         writeDate(outBuf, date);
