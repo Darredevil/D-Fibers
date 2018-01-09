@@ -3,6 +3,10 @@ import std.socket;
 import std.conv;
 import core.thread;
 import std.string;
+import std.algorithm;
+import std.conv;
+import std.format;
+import std.range;
 
 import dfio;
 import http.parser.core;
@@ -12,9 +16,7 @@ import http.parser.core;
 
 
 void server_worker(Socket client) {
-    char[1024] buffer;
-    auto parser = new HttpParser();
-    HttpVersion v;
+    ubyte[1024] buffer;
 
     scope(exit) {
         client.shutdown(SocketShutdown.BOTH);
@@ -22,37 +24,68 @@ void server_worker(Socket client) {
     }
 
     logf("Started server_worker, client = %s", client);
-    bool keepAlive = true; // default for HTTP 1.1
+    auto outBuf = appender!(char[]);
+    auto bodyBuf = appender!(char[]);
+    bool keepAlive = false;
     do {
-        auto received = client.receive(buffer);
-        logf("Is socket blocking? %s", client.blocking); // just a hunch
-        if (received < 0) {
-            logf("Error %d", received);
-            perror("Error while reading from client");
-            return;
-        }
-        logf("Server_worker received:\n<%s>", buffer[0.. received]);
-
-        //enum header = "HTTP/1.0 200 OK\nContent-Type: text/html; charset=utf-8\n\n";
-
-        parser.onBody = (parser, HttpBodyChunk data) {
-            client.send(data.buffer);
+        scope parser = new HttpParser();
+        bool reading = true;
+        int connection = -1;
+        bodyBuf.clear();
+        parser.onMessageComplete = (parser) {
+            reading = false;
         };
-
         parser.onHeader = (parser, HttpHeader header) {
             logf("Parser Header <%s> with value <%s>", header.name, header.value);
-            if (header.name.toLower == "connection" && header.value.toLower == "close")
-                keepAlive = false;
+            if (header.name.toLower == "connection")
+                if (header.value.toLower == "close")
+                    connection = 0;
+                else
+                    connection = 1;
         };
-
-        parser.execute(to!string(buffer[0..received]));
-        v = parser.protocolVersion();
+        parser.onBody = (parser, HttpBodyChunk data) {
+            logf("Parse body, received <%s>", data.buffer);
+            formattedWrite(bodyBuf, cast(char[])data.buffer);
+        };
+        while(reading){
+            ptrdiff_t received = client.receive(buffer);
+            if (received < 0) {
+                logf("Error %d", received);
+                perror("Error while reading from client");
+                return;
+            }
+            else if (received == 0) { //socket is closed (eof)
+                connection = 0;
+                reading = false;
+            }
+            else {
+                logf("Server_worker received:\n<%s>", cast(char[])buffer[0.. received]);
+                parser.execute(buffer[0..received]);
+            }
+        }
+        HttpVersion v = parser.protocolVersion();
+        // if no connection header present, keep connection for 1.1
+        if (connection == 1) keepAlive = true;
+        else if (connection < 0 && v.major == 1 && v.minor == 1) keepAlive = true;
+        else keepAlive = false;
         logf("Protocol version = %s", v);
-        if (v.toString == "1.0")
-            keepAlive = false;
+        outBuf.clear();
 
-        //string response = header ~ to!string(buffer[0..received]) ~ "\n";
-        //client.send(response);
+        formattedWrite(outBuf,
+            "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: %d\r\n",
+            bodyBuf.data.length
+        );
+        if (keepAlive) {
+            logf("Keep-alive request");
+            formattedWrite(outBuf, "Connection: keep-alive\r\n\r\n");
+        }
+        else {
+            logf("Non keep-alive request");
+            formattedWrite(outBuf, "\r\n");
+        }
+        copy(bodyBuf.data, outBuf);
+        logf("Sent <%s>", cast(char[])outBuf.data);
+        client.send(outBuf.data);
     } while(keepAlive);
 }
 
