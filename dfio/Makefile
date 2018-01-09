@@ -19,9 +19,9 @@ simple-bench-js:
 BlockingQueue.o:
 	dmd $(DFLAGS) -c BlockingQueue.d
 
-libdfio.so: dfio.d
+libdfio.so: dfio.d BlockingQueue.o
 	dmd $(DFLAGS) -c dfio.d -fPIC
-	dmd $(DFLAGS) -oflibdfio.so dfio.o -shared -L-rpath=dfio
+	dmd $(DFLAGS) -oflibdfio.so dfio.o BlockingQueue.o -shared -L-rpath=dfio
 	cp libdfio.so tests/
 
 http-parser:

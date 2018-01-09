@@ -7,7 +7,7 @@ abc: ab.c
 
 hello-dlang: static_http/hello.d
 	dmd $(DFLAGS) -I.. -c static_http/hello.d -I../../http-parser.d/out/di ../../http-parser.d/out/http-parser.a
-	dmd $(DFLAGS) hello.o ../BlockingQueue.o ../../http-parser.d/out/*.o  -L=../libdfio.so -L-rpath=.:../ -ofhello-dlang
+	dmd $(DFLAGS) hello.o ../../http-parser.d/out/*.o  -L=../libdfio.so -L-rpath=.:../ -ofhello-dlang
 
 hello-golang: static_http/hello.go
 	go build -o hello-golang $<
