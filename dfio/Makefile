@@ -1,13 +1,13 @@
 DFLAGS=-O -release -inline
 export DFLAGS
 
-build-tests: libdfio.so BlockingQueue.o
+build-tests: libdfio.so BlockingQueue.o http-parser
 	$(MAKE) -C tests
 
-bench: libdfio.so BlockingQueue.o
+bench: libdfio.so BlockingQueue.o http-parser
 	$(MAKE) -C bench
 
-simple-bench: libdfio.so BlockingQueue.o
+simple-bench: libdfio.so BlockingQueue.o http-parser
 	$(MAKE) -C bench simple-bench
 
 BlockingQueue.o:
@@ -17,6 +17,9 @@ libdfio.so: dfio.d
 	dmd $(DFLAGS) -c dfio.d -fPIC
 	dmd $(DFLAGS) -oflibdfio.so dfio.o -shared -L-rpath=dfio
 	cp libdfio.so tests/
+
+http-parser:
+	cd ../http-parser.d && git submodule update --init && make
 
 test-all: build-tests
 	cd tests && ./compiles_n_runs
@@ -48,10 +51,11 @@ test-ping_pong_full_duplex_8: build-tests
 test-ping_pong_full_duplex_20: build-tests
 	cd tests && ./ping_pong_full_duplex_n --count=20
 
-test-echo_sever: build-tests
+test-echo_sever: build-tests http-parser
 	cd tests && ./echo_server
 
 clean:
-	cd tests && make clean
-	cd bench && make clean
+	$(MAKE) -C tests clean
+	$(MAKE) -C bench clean
+	$(MAKE) -C ../http-parser.d clean
 	rm -f *.o *.so main
