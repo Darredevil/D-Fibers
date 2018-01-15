@@ -13,16 +13,25 @@ hello-golang: static_http/hello.go
 	go build -o hello-golang $<
 
 simple-bench: abc hello-dlang
+	rm -f *.csv
 	(./hello-dlang &) && (./abc hello-dlang '[0-1k:100kA+10x3]' localhost:8080/) && (pkill hello-dlang)
+	cp *.csv results/dmd.csv
+	cd results && ./extract_plot_data.sh dmd.csv && gnuplot -c plot_bench.plt "DMD Benchmark" "dmd_bench.png" "dmd.csv.dat"
 
 simple-bench-go: abc hello-golang
+	rm -f *.csv
 	(GOMAXPROCS=1 ./hello-golang &) && (./abc hello-golang '[0-1k:100kA+10x3]' localhost:8080/) && (pkill hello-golang)
+	cp *.csv results/go.csv
+	cd results && ./extract_plot_data.sh go.csv && gnuplot -c plot_bench.plt "Golang Benchmark" "go_bench.png" "go.csv.dat"
 
 simple-bench-js: abc static_http/hello.js
+	rm -f *.csv
 	(node static_http/hello.js &) && (./abc node '[0-1k:100kA+10x3]' localhost:8080/) && (pkill node)
+	cp *.csv results/nodejs.csv
+	cd results && ./extract_plot_data.sh nodejs.csv && gnuplot -c plot_bench.plt "NodeJS Benchmark" "nodejs_bench.png" "nodejs.csv.dat"
 
 clean:
-	rm -f *.o *.so
-	find . -executable -type f -delete
+	rm -f *.o *.so *.csv
+	find . -maxdepth 1 -executable -type f -delete
 
 
