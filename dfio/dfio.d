@@ -458,8 +458,62 @@ struct AwaitingFiber {
 
 // list of awaiting fibers
 struct DescriptorState {
-    AwaitingFiber[] waiters;  // can optimize for 1-element case, more on that later
+    union
+    {
+        AwaitingFiber[] waiters;
+        AwaitingFiber single;
+    }
+    uint size;
     bool firstUse = true;
+
+    void blockFiber(Fiber f, int op)
+    {
+        if (size == 0)
+            single = AwaitingFiber(currentFiber, op);
+        else if (size == 1)
+            waiters = [single, AwaitingFiber(currentFiber, op)];
+        else
+            waiters ~= AwaitingFiber(currentFiber, op);
+        size += 1;
+    }
+
+    uint unblockFibers(int event) {
+        if(size == 0) return 0;
+        uint unblocked;
+        if (size == 1) {
+            if ((single.op & event) != 0) {
+                queue.push(cast(Fiber)(single.fiber));
+                size = 0;
+                unblocked += 1;
+            }
+        }
+        else {
+            size_t j = 0;
+            for (size_t i = 0; i<waiters.length;) {
+                auto a = waiters[i];
+                // TODO: exceptions (errors)
+                if ((a.op & event) != 0) {
+                    queue.push(cast(Fiber)(a.fiber));
+                    unblocked += 1;
+                    i++;
+                }
+                else {
+                    waiters[j] = waiters[i];
+                    j++;
+                    i++;
+                }
+            }
+            waiters = waiters[0..j];
+            size = cast(uint)j;
+            if (size == 1) {
+                single = waiters[0];
+                waiters = null;
+            }
+            else
+                waiters.assumeSafeAppend();
+        }
+        return unblocked;
+    }
 }
 
 // intercept - a filter for file descriptor, changes flags and register on first use
@@ -500,7 +554,7 @@ void deregisterFd(int fd) {
 // reschedule - put fiber in a wait list, and get back to scheduling loop
 void reschedule(int fd, Fiber fiber, int op) {
     mtx.lock();
-    (cast(DescriptorState[])descriptors)[fd].waiters ~= AwaitingFiber(currentFiber, op);
+    descriptors[fd].unshared.blockFiber(currentFiber, op);
     mtx.unlock();
     Fiber.yield();
 }
@@ -524,27 +578,7 @@ size_t processEvents()
     for (int n = 0; n < r; n++) {
         int fd = events[n].data.fd;
         mtx.lock();
-        auto w = descriptors[fd].waiters;
-
-        //TODO: remove the ones from the waiting list
-        size_t j = 0;
-        for (size_t i = 0; i<w.length;) {
-            auto a = w[i];
-            //stderr.writefln("Event %s on fd=%s op=%s waiter=%s", events[n].events, events[n].data.fd, a.op, cast(void*)a.fiber);
-            // 3. the trick is read and write are separate, and then there are TODO: exceptions (errors)
-            if ((a.op & events[n].events) != 0) {
-                logf("EVENT ON %d", fd);
-                queue.push(cast(Fiber)(a.fiber));
-                unblocked += 1;
-                i++;
-            }
-            else {
-                w[j] = w[i];
-                j++;
-                i++;
-            }
-        }
-        descriptors[fd].waiters = w[0..j];
+        unblocked += descriptors[fd].unshared.unblockFibers(events[n].events);
         mtx.unlock();
     }
     return unblocked;
