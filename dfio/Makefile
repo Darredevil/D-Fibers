@@ -1,5 +1,7 @@
 DFLAGS=-O -release -inline
 export DFLAGS
+DC=dmd
+export DC
 
 build-tests: libdfio.so BlockingQueue.o http-parser
 	$(MAKE) -C tests
@@ -10,6 +12,11 @@ bench: libdfio.so BlockingQueue.o http-parser
 simple-bench: libdfio.so BlockingQueue.o http-parser
 	$(MAKE) -C bench simple-bench
 
+simple-bench-ldc: DC=ldc2
+simple-bench-ldc: DFLAGS=-g
+simple-bench-ldc: libdfio.so BlockingQueue.o http-parser
+	$(MAKE) -C bench simple-bench-ldc
+
 simple-bench-go:
 	$(MAKE) -C bench simple-bench-go
 
@@ -17,11 +24,11 @@ simple-bench-js:
 	$(MAKE) -C bench simple-bench-js
 
 BlockingQueue.o:
-	dmd $(DFLAGS) -c BlockingQueue.d
+	$(DC) $(DFLAGS) -c BlockingQueue.d
 
 libdfio.so: dfio.d BlockingQueue.o
-	dmd $(DFLAGS) -c dfio.d -fPIC
-	dmd $(DFLAGS) -oflibdfio.so dfio.o BlockingQueue.o -shared -L-rpath=dfio
+	$(DC) $(DFLAGS) -c dfio.d
+	$(DC) $(DFLAGS) -L-rpath=dfio -shared -oflibdfio.so dfio.o BlockingQueue.o
 	cp libdfio.so tests/
 
 http-parser:
