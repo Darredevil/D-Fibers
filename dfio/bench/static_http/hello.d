@@ -6,6 +6,7 @@ import std.range;
 import std.stdio;
 import std.string;
 import std.socket;
+import std.uni;
 import core.thread;
 
 import dfio;
@@ -61,21 +62,22 @@ void server_worker(Socket client) {
     auto bodyBuf = appender!(char[]);
     bool keepAlive = false;
     logf("Started server_worker, client = %s", client);
+    scope parser = new HttpParser();
+    bool reading = true;
+    int connection = -1;
+    parser.onMessageComplete = (parser) {
+        reading = false;
+    };
+    parser.onHeader = (parser, HttpHeader header) {
+        logf("Parser Header <%s> with value <%s>", header.name, header.value);
+        if (sicmp(header.name, "connection") == 0)
+            if (sicmp(header.value,"close") == 0)
+                connection = 0;
+            else
+                connection = 1;
+    };
     do {
-        scope parser = new HttpParser();
-        bool reading = true;
-        int connection = -1;
-        parser.onMessageComplete = (parser) {
-            reading = false;
-        };
-        parser.onHeader = (parser, HttpHeader header) {
-            logf("Parser Header <%s> with value <%s>", header.name, header.value);
-            if (header.name.toLower == "connection")
-                if (header.value.toLower == "close")
-                    connection = 0;
-                else
-                    connection = 1;
-        };
+        reading = true;
         while(reading){
             ptrdiff_t received = client.receive(buffer);
             if (received < 0) {
