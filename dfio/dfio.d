@@ -20,6 +20,7 @@ import BlockingQueue : BlockingQueue, unshared;
 import core.sys.posix.stdlib: abort;
 import core.sys.posix.fcntl;
 import core.memory;
+import core.sys.posix.sys.mman;
 
 Fiber currentFiber; // this is TLS per user thread
 
@@ -464,7 +465,7 @@ struct DescriptorState {
         AwaitingFiber single;
     }
     uint size;
-    bool firstUse = true;
+    bool notUsed = false;
 
     void blockFiber(Fiber f, int op)
     {
@@ -519,7 +520,7 @@ struct DescriptorState {
 // intercept - a filter for file descriptor, changes flags and register on first use
 void interceptFd(int fd) {
     if (fd < 0 || fd >= descriptors.length) return;
-    if (descriptors[fd].firstUse) {
+    if (!descriptors[fd].notUsed) {
         logf("First use, registering fd = %d", fd);
         int flags = fcntl(fd, F_GETFL, 0);
         fcntl(fd, F_SETFL, flags | O_NONBLOCK).checked;
@@ -527,7 +528,7 @@ void interceptFd(int fd) {
         event.events = EPOLLIN | EPOLLOUT; // TODO: most events that make sense to watch for
         event.data.fd = fd;
         epoll_ctl(event_loop_fd, EPOLL_CTL_ADD, fd, &event).checked("ERROR: failed epoll_ctl add!");
-        descriptors[fd].firstUse = false;
+        descriptors[fd].notUsed = true;
     }
     int flags = fcntl(fd, F_GETFL, 0);
     if (!(flags & O_NONBLOCK)) {
@@ -538,17 +539,17 @@ void interceptFd(int fd) {
 
 void interceptFdNoFcntl(int fd) {
     if (fd < 0 || fd >= descriptors.length) return;
-    if (descriptors[fd].firstUse) {
+    if (!descriptors[fd].notUsed) {
         epoll_event event;
         event.events = EPOLLIN | EPOLLOUT; // TODO: most events that make sense to watch for
         event.data.fd = fd;
         epoll_ctl(event_loop_fd, EPOLL_CTL_ADD, fd, &event).checked("ERROR: failed epoll_ctl add!");
-        descriptors[fd].firstUse = false;
+        descriptors[fd].notUsed = true;
     }
 }
 
 void deregisterFd(int fd) {
-    if(fd >= 0 && fd < descriptors.length) descriptors[fd].firstUse = true;
+    if(fd >= 0 && fd < descriptors.length) descriptors[fd].notUsed = false;
 }
 
 // reschedule - put fiber in a wait list, and get back to scheduling loop
@@ -564,7 +565,8 @@ void startloop()
     mtx = cast(shared)new Mutex();
     event_loop_fd = cast(int)epoll_create1(0).checked("ERROR: Failed to create event-loop!");
     ssize_t fdMax = sysconf(_SC_OPEN_MAX).checked;
-    descriptors = cast(shared)new DescriptorState[fdMax];
+    //descriptors = cast(shared)new DescriptorState[fdMax];
+    descriptors = (cast(shared(DescriptorState*)) mmap(null, fdMax * DescriptorState.sizeof, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0))[0..fdMax];
     queue = new shared BlockingQueue!Fiber;
 }
 
