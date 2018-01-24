@@ -465,7 +465,7 @@ struct DescriptorState {
         AwaitingFiber single;
     }
     uint size;
-    bool notUsed = false;
+    bool intercepted = false;
 
     void blockFiber(Fiber f, int op)
     {
@@ -520,7 +520,7 @@ struct DescriptorState {
 // intercept - a filter for file descriptor, changes flags and register on first use
 void interceptFd(int fd) {
     if (fd < 0 || fd >= descriptors.length) return;
-    if (!descriptors[fd].notUsed) {
+    if (!descriptors[fd].intercepted) {
         logf("First use, registering fd = %d", fd);
         int flags = fcntl(fd, F_GETFL, 0);
         fcntl(fd, F_SETFL, flags | O_NONBLOCK).checked;
@@ -528,7 +528,7 @@ void interceptFd(int fd) {
         event.events = EPOLLIN | EPOLLOUT; // TODO: most events that make sense to watch for
         event.data.fd = fd;
         epoll_ctl(event_loop_fd, EPOLL_CTL_ADD, fd, &event).checked("ERROR: failed epoll_ctl add!");
-        descriptors[fd].notUsed = true;
+        descriptors[fd].intercepted = true;
     }
     int flags = fcntl(fd, F_GETFL, 0);
     if (!(flags & O_NONBLOCK)) {
@@ -539,17 +539,17 @@ void interceptFd(int fd) {
 
 void interceptFdNoFcntl(int fd) {
     if (fd < 0 || fd >= descriptors.length) return;
-    if (!descriptors[fd].notUsed) {
+    if (!descriptors[fd].intercepted) {
         epoll_event event;
         event.events = EPOLLIN | EPOLLOUT; // TODO: most events that make sense to watch for
         event.data.fd = fd;
         epoll_ctl(event_loop_fd, EPOLL_CTL_ADD, fd, &event).checked("ERROR: failed epoll_ctl add!");
-        descriptors[fd].notUsed = true;
+        descriptors[fd].intercepted = true;
     }
 }
 
 void deregisterFd(int fd) {
-    if(fd >= 0 && fd < descriptors.length) descriptors[fd].notUsed = false;
+    if(fd >= 0 && fd < descriptors.length) descriptors[fd].intercepted = false;
 }
 
 // reschedule - put fiber in a wait list, and get back to scheduling loop

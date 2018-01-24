@@ -65,9 +65,11 @@ By default we use the dmd compiler, however benchmarks have shown the ldc compil
 ### Benchmarking
 
 Before running the benchmarks some kernel limits might need to be increased, we suggest at least the following lines to be added in /etc/sysctl.conf:
-`fs.file-max = 500000`
-`net.core.somaxconn = 100000`
-`net.ipv4.ip_local_port_range = 10000 60000`
+```
+fs.file-max = 500000
+net.core.somaxconn = 100000
+net.ipv4.ip_local_port_range = 10000 60000
+```
 
 To test our lib we decided to use a simple http server which serves some basic requests. Currently we testes against the goland and nodeJS equivalent with promising results.
 
