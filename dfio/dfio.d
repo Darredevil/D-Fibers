@@ -21,6 +21,7 @@ import core.sys.posix.stdlib: abort;
 import core.sys.posix.fcntl;
 import core.memory;
 import core.sys.posix.sys.mman;
+import core.sys.posix.pthread;
 
 Fiber currentFiber; // this is TLS per user thread
 
@@ -35,7 +36,7 @@ enum int MSG_DONTWAIT = 0x40;
 void logf(string file = __FILE__, int line = __LINE__, T...)(string msg, T args)
 {
     debug stderr.writefln(msg, args);
-    debug stderr.writefln("\tat %s:%s:[LWP:%s]", file, line, Thread.getThis.id);
+    debug stderr.writefln("\tat %s:%s:[LWP:%s]", file, line, pthread_self());
 }
 
 int checked(int value, const char* msg="unknown place") {
@@ -44,6 +45,17 @@ int checked(int value, const char* msg="unknown place") {
         _exit(value);
     }
     return value;
+}
+
+ssize_t withErrorno(ssize_t resp){
+    if(resp < 0) {
+        //logf("Syscall ret %d", resp);
+        errno = cast(int)-resp;
+        return -1;
+    }
+    else {
+        return resp;
+    }
 }
 
 ssize_t checked(ssize_t value, const char* msg="unknown place") {
@@ -207,7 +219,7 @@ extern(C) ssize_t read(int fd, void *buf, size_t count)
 {
     if (currentFiber is null) {
         logf("READ PASSTHROUGH!");
-        return syscall(SYS_READ, fd, cast(ssize_t) buf, cast(ssize_t) count);
+        return syscall(SYS_READ, fd, cast(ssize_t) buf, cast(ssize_t) count).withErrorno;
     }
     else {
         logf("HOOKED READ WITH MY LIB!"); // TODO: temporary for easy check, remove later
@@ -219,13 +231,8 @@ extern(C) ssize_t read(int fd, void *buf, size_t count)
                 reschedule(fd, currentFiber, EPOLLIN);
                 continue;
             }
-            else if(resp < 0) {
-                errno = cast(int)-resp;
-                return -1;
-            }
-            else {
-                return resp;
-            }
+            else
+                return withErrorno(resp);
         }
         assert(0);
     }
@@ -234,18 +241,16 @@ extern(C) ssize_t read(int fd, void *buf, size_t count)
 extern(C) ssize_t write(int fd, const void *buf, size_t count)
 {
     logf("HOOKED WRITE FD=%d!", fd);
-
-    ssize_t ret = syscall(SYS_WRITE, fd, cast(size_t) buf, count);
-    if (ret < 0)
-        abort();
-    return cast(int) ret;
+    ssize_t resp = syscall(SYS_WRITE, fd, cast(size_t) buf, count);
+    return withErrorno(resp);
 }
 
 extern(C) int accept(int sockfd, sockaddr *addr, socklen_t *addrlen)
 {
     if (currentFiber is null) {
         logf("ACCEPT PASSTHROUGH FD=%d", sockfd);
-        return cast(int)syscall(SYS_ACCEPT, sockfd, cast(size_t) addr, cast(size_t) addrlen);
+        ssize_t resp = cast(int)syscall(SYS_ACCEPT, sockfd, cast(size_t) addr, cast(size_t) addrlen);
+        return cast(int)withErrorno(resp);
     }
     else {
         logf("HOOKED ACCEPT FD=%d", sockfd); // TODO: temporary for easy check, remove later
@@ -257,13 +262,7 @@ extern(C) int accept(int sockfd, sockaddr *addr, socklen_t *addrlen)
                 reschedule(sockfd, currentFiber, EPOLLIN);
                 continue;
             }
-            else if(resp < 0) {
-                errno = cast(int)-resp;
-                return -1;
-            }
-            else {
-                return cast(int)resp;
-            }
+            return cast(int)withErrorno(resp);
         }
         assert(0);
     }
@@ -274,16 +273,14 @@ extern(C) int accept4(int sockfd, sockaddr *addr, socklen_t *addrlen, int flags)
     logf("HOOKED ACCEPT4 WITH MY LIB!"); // TODO: temporary for easy check, remove later
 
     ssize_t ret = syscall(SYS_ACCEPT4, sockfd, cast(size_t) addr, cast(size_t) addrlen, flags);
-    if (ret < 0)
-        abort();
-    return cast(int) ret;
+    return cast(int) withErrorno(ret);
 }
 
-extern(C) int connect(int sockfd, const sockaddr *addr, socklen_t addrlen)
+extern(C) int connect(int sockfd, const sockaddr *addr, socklen_t *addrlen)
 {
     if (currentFiber is null) {
         logf("CONNECT PASSTHROUGH!");
-        return cast(int)syscall(SYS_CONNECT, sockfd, cast(size_t) addr, cast(size_t) addrlen);
+        return cast(int)syscall(SYS_CONNECT, sockfd, cast(size_t) addr, cast(size_t) addrlen).withErrorno;
     }
     else {
         logf("HOOKED CONNECT WITH MY LIB!"); // TODO: temporary for easy check, remove later
@@ -295,13 +292,8 @@ extern(C) int connect(int sockfd, const sockaddr *addr, socklen_t addrlen)
                 reschedule(sockfd, currentFiber, EPOLLIN);
                 continue;
             }
-            else if(resp < 0) {
-                errno = cast(int)-resp;
-                return -1;
-            }
-            else {
-                return cast(int)resp;
-            }
+            else
+                return cast(int)withErrorno(resp);
         }
         assert(0);
     }
@@ -312,7 +304,7 @@ extern(C) ssize_t sendto(int sockfd, const void *buf, size_t len, int flags,
 {
     if (currentFiber is null) {
         logf("SENDTO PASSTHROUGH!");
-        return cast(int)syscall(SYS_SENDTO, sockfd, cast(size_t) dest_addr, cast(size_t) addrlen);
+        return cast(int)syscall(SYS_SENDTO, sockfd, cast(size_t) dest_addr, cast(size_t) addrlen).withErrorno;
     }
     else {
         logf("HOOKED SENDTO WITH MY LIB!"); // TODO: temporary for easy check, remove later
@@ -325,13 +317,8 @@ extern(C) ssize_t sendto(int sockfd, const void *buf, size_t len, int flags,
                 reschedule(sockfd, currentFiber, EPOLLIN);
                 continue;
             }
-            else if(resp < 0) {
-                errno = cast(int)-resp;
-                return -1;
-            }
-            else {
-                return resp;
-            }
+            else 
+                return withErrorno(resp);
         }
         assert(0);
     }
@@ -347,7 +334,7 @@ extern(C) ssize_t recv(int sockfd, const void *buf, size_t len, int flags)
     if (currentFiber is null) {
         logf("RECV PASSTHROUGH FD=%d !", sockfd);
         return cast(int)syscall(SYS_RECVFROM, sockfd,  cast(size_t) buf, len, flags,
-            cast(size_t) &src_addr, cast(size_t)&addrlen);
+            cast(size_t) &src_addr, cast(size_t)&addrlen).withErrorno;
     }
     else {
         logf("HOOKED RECV FD=%d", sockfd);
@@ -360,44 +347,34 @@ extern(C) ssize_t recv(int sockfd, const void *buf, size_t len, int flags)
                 reschedule(sockfd, currentFiber, EPOLLIN);
                 continue;
             }
-            else if(resp < 0) {
-                errno = cast(int)-resp;
-                return -1;
-            }
-            else {
-                return resp;
-            }
+            else 
+                return withErrorno(resp);
         }
         assert(0);
     }
 }
 
 extern(C) ssize_t recvfrom(int sockfd, const void *buf, size_t len, int flags,
-                      const sockaddr *src_addr, socklen_t addrlen)
+                      const sockaddr *src_addr, ssize_t* addrlen)
 {
     if (currentFiber is null) {
         logf("RECEIVEFROM PASSTHROUGH!");
         return cast(int)syscall(SYS_RECVFROM, sockfd,  cast(size_t) buf, len, flags,
-                cast(size_t) src_addr, addrlen);
+                cast(size_t) src_addr, cast(size_t)addrlen).withErrorno;
     }
     else {
         logf("HOOKED RECEIVEFROM WITH MY LIB!"); // TODO: temporary for easy check, remove later
         interceptFdNoFcntl(sockfd);
         for(;;) {
             ssize_t resp = syscall(SYS_RECVFROM, sockfd, cast(size_t) buf, len, MSG_DONTWAIT | flags,
-                cast(size_t) src_addr, addrlen);
+                cast(size_t) src_addr, cast(size_t)addrlen);
             if (resp == -EWOULDBLOCK || resp == -EAGAIN) {
                 logf("RECEIVEFROM GOT DELAYED - sockfd %d, resp = %d", sockfd, resp);
                 reschedule(sockfd, currentFiber, EPOLLIN);
                 continue;
             }
-            else if(resp < 0) {
-                errno = cast(int)-resp;
-                return -1;
-            }
-            else {
-                return resp;
-            }
+            else
+                return withErrorno(resp);
         }
         assert(0);
     }
@@ -407,7 +384,7 @@ extern(C) ssize_t close(int fd)
 {
     logf("HOOKED CLOSE!");
     deregisterFd(fd);
-    return cast(int)syscall(SYS_CLOSE, fd);
+    return cast(int)withErrorno(syscall(SYS_CLOSE, fd));
 }
 
 void runFibers()
