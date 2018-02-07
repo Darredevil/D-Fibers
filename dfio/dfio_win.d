@@ -48,6 +48,17 @@ enum
     ProcThreadAttributeUmsThread                    = 6,
     ProcThreadAttributeMitigationPolicy             = 7;
 
+ enum UMS_THREAD_INFO_CLASS: uint { 
+  UmsThreadInvalidInfoClass  = 0,
+  UmsThreadUserContext       = 1,
+  UmsThreadPriority          = 2,
+  UmsThreadAffinity          = 3,
+  UmsThreadTeb               = 4,
+  UmsThreadIsSuspended       = 5,
+  UmsThreadIsTerminated      = 6,
+  UmsThreadMaxInfoClass      = 7
+}
+
 uint ProcThreadAttributeValue(uint Number, bool Thread, bool Input, bool Additive)
 {
     return (Number & PROC_THREAD_ATTRIBUTE_NUMBER) | 
@@ -61,10 +72,17 @@ enum PROC_THREAD_ATTRIBUTE_UMS_THREAD = ProcThreadAttributeValue(ProcThreadAttri
 extern(Windows) BOOL EnterUmsSchedulingMode(UMS_SCHEDULER_STARTUP_INFO* SchedulerStartupInfo);
 extern(Windows) BOOL UmsThreadYield(PVOID SchedulerParam);
 extern(Windows) BOOL DequeueUmsCompletionListItems(UMS_COMPLETION_LIST* UmsCompletionList, DWORD WaitTimeOut, UMS_CONTEXT** UmsThreadList);
-extern(Windows) UMS_CONTEXT* GetNextUmsListItem(UMS_CONTEXT** UmsContext);
+extern(Windows) UMS_CONTEXT* GetNextUmsListItem(UMS_CONTEXT* UmsContext);
 extern(Windows) BOOL ExecuteUmsThread(UMS_CONTEXT* UmsThread);
 extern(Windows) BOOL CreateUmsCompletionList(UMS_COMPLETION_LIST** UmsCompletionList);
 extern(Windows) BOOL CreateUmsThreadContext(UMS_CONTEXT** lpUmsThread);
+extern(Windows) BOOL QueryUmsThreadInformation(
+    UMS_CONTEXT*          UmsThread,
+    UMS_THREAD_INFO_CLASS UmsThreadInfoClass,
+    PVOID                 UmsThreadInformation,
+    ULONG                 UmsThreadInformationLength,
+    PULONG                ReturnLength
+);
 
 extern(Windows) BOOL InitializeProcThreadAttributeList(
   PROC_THREAD_ATTRIBUTE_LIST* lpAttributeList,
@@ -98,20 +116,12 @@ extern(Windows) HANDLE CreateRemoteThreadEx(
 alias UmsSchedulerProc = extern(Windows) VOID function(UMS_SCHEDULER_REASON Reason, ULONG_PTR ActivationPayload, PVOID SchedulerParam);
 
 UMS_COMPLETION_LIST* completionList;
-
-struct SchedulerContext {
-    UMS_COMPLETION_LIST* completionList;
-    DList!(UMS_CONTEXT*) queue;
-    int blocked;
-}
-
-HANDLE thread;
+DList!(UMS_CONTEXT*) queue;
+int activeThreads = 0;
 
 void startloop()
 {
     wenforce(CreateUmsCompletionList(&completionList), "failed to create UMS completion");
-    thread = CreateThread(null, 0, &schedulerEntry, completionList, 0, null); 
-    wenforce(SetThreadAffinityMask(thread, 1), "setting affinity failed");
 }
 
 extern(Windows) uint worker(void* func)
@@ -130,69 +140,102 @@ void spawn(void delegate() func)
     wenforce(InitializeProcThreadAttributeList(attrList, 1, 0, &size), "failed to initialize proc thread");
     scope(exit) DeleteProcThreadAttributeList(attrList);
     
-    UMS_CONTEXT * ctx;
-    enforce(CreateUmsThreadContext(&ctx), "failed to create UMS context");
+    UMS_CONTEXT* ctx;
+    wenforce(CreateUmsThreadContext(&ctx), "failed to create UMS context");
 
     UMS_CREATE_THREAD_ATTRIBUTES umsAttrs;
     umsAttrs.UmsCompletionList = completionList;
     umsAttrs.UmsContext = ctx;
     umsAttrs.UmsVersion = UMS_VERSION;
-
     wenforce(UpdateProcThreadAttribute(attrList, 0, PROC_THREAD_ATTRIBUTE_UMS_THREAD, &umsAttrs, umsAttrs.sizeof, null, null), "failed to update pric thread");
-    CreateRemoteThreadEx(GetCurrentProcess(), null, 64*1024, &worker, &func, 0, attrList, null);
+    wenforce(CreateRemoteThreadEx(GetCurrentProcess(), null, 0, &worker, &func, 0, attrList, null), "failed to create thread");
+    activeThreads += 1;
 }
 
 void runFibers()
 {
-    WaitForSingleObject(thread, 1000);
-}
-
-extern(Windows) uint schedulerEntry(void* parameter)
-{
-    SchedulerContext context;
-    context.completionList = cast(UMS_COMPLETION_LIST*)parameter;
-    context.queue = make!(DList!(UMS_CONTEXT*));
     UMS_SCHEDULER_STARTUP_INFO info;
     info.UmsVersion = UMS_VERSION;
     info.CompletionList = completionList;
     info.SchedulerProc = &umsScheduler;
-    info.SchedulerParam = &context;
-    
-    if (!EnterUmsSchedulingMode(&info))
-    {
-        printf("Failed to enter UMS mode\n");
+    info.SchedulerParam = null;
+    wenforce(EnterUmsSchedulingMode(&info), "failed to enter UMS mode\n");
+}
+
+import std.format;
+
+void outputToConsole(const(wchar)[] msg)
+{
+    HANDLE output = GetStdHandle(STD_OUTPUT_HANDLE);
+    uint size = cast(uint)msg.length;
+    WriteConsole(output, msg.ptr, size, &size, null);
+}
+
+void logf(T...)(const(wchar)[] fmt, T args)
+{
+    try {
+        formattedWrite(&outputToConsole, fmt, args);
     }
-    return 0;
+    catch (Exception e) {
+        outputToConsole("ARGH!"w);
+    }
 }
 
 extern(Windows) VOID umsScheduler(UMS_SCHEDULER_REASON Reason, ULONG_PTR ActivationPayload, PVOID SchedulerParam)
 {
-    printf("!!!!\n");
     UMS_CONTEXT* ready;
-    SchedulerContext* context = cast(SchedulerContext*)SchedulerParam;
-    auto completionList = context.completionList;
-    auto queue = &context.queue;
-    wenforce(DequeueUmsCompletionListItems(completionList, 0, &ready), "failed to dequeue ums workers");
+    logf("-----\nGot scheduled, reason: %d, completion list: %x\n"w, Reason, completionList);
+    if(!DequeueUmsCompletionListItems(completionList, 0, &ready)){
+        logf("Failed to dequeue ums workers!\n"w);
+        return;
+    }    
     for (;;)
     {
-      while (ready)
+      while (ready != null)
       {
-          UMS_CONTEXT* ctx = GetNextUmsListItem(&ready);
-          queue.insertBack(ctx);
+          logf("Dequeued UMS thread context: %x\n"w, ready);
+          queue.insertBack(ready);
+          ready = GetNextUmsListItem(ready);
       }
       while(!queue.empty)
       {
         UMS_CONTEXT* ctx = queue.front;
+        logf("Fetched thread context from our queue: %x\n", ctx);
         queue.removeFront();
-        auto ret = ExecuteUmsThread(ctx);
-        if (ret == ERROR_RETRY) // this UMS thread is locked, try it later
-          queue.insertBack(ctx);
-        else 
+        BOOLEAN terminated;
+        uint size;
+        if(!QueryUmsThreadInformation(ctx, UMS_THREAD_INFO_CLASS.UmsThreadIsTerminated, &terminated, BOOLEAN.sizeof, &size))
         {
-            printf("Failure to execute %d\n", ret);
-            assert(0); // should not get there
+            logf("Query UMS failed: %d\n"w, GetLastError());
+            return;
+        }
+        if (!terminated)
+        {
+            auto ret = ExecuteUmsThread(ctx);
+            if (ret == ERROR_RETRY) // this UMS thread is locked, try it later
+                queue.insertBack(ctx);
+            else
+            {
+                logf("Failed to execute thread: %d\n"w, GetLastError());
+                return;
+            }
+        }
+        else
+        {
+            logf("Terminated: %x\n"w, ctx);
+            //TODO: delete context or maybe cache them somewhere?
+            activeThreads -= 1;
         }
       }
-      wenforce(DequeueUmsCompletionListItems(completionList, INFINITE, &ready), "failed to dequeue ums workers");
+      if (activeThreads == 0)
+      {
+          logf("Shutting down\n"w);
+          return;
+      }
+      if(!DequeueUmsCompletionListItems(completionList, INFINITE, &ready))
+      {
+           logf("Failed to dequeue UMS workers!\n"w);
+           return;
+      }
     }
 }
