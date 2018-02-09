@@ -22,6 +22,8 @@ import core.sys.posix.fcntl;
 import core.memory;
 import core.sys.posix.sys.mman;
 import core.sys.posix.pthread;
+import core.sys.posix.aio;
+import core.sys.linux.sys.signalfd;
 
 Fiber currentFiber; // this is TLS per user thread
 
@@ -224,12 +226,34 @@ extern(C) ssize_t read(int fd, void *buf, size_t count)
     else {
         logf("HOOKED READ WITH MY LIB!"); // TODO: temporary for easy check, remove later
         interceptFd(fd);
-        for(;;) {
-            ssize_t resp = syscall(SYS_READ, fd, cast(ssize_t) buf, cast(ssize_t) count);
-            if (resp == -EWOULDBLOCK || resp == -EAGAIN) {
+
+        stat_t stat;
+        fstat(fd, &stat);
+
+        if(stat.st_mode == S_IFSOCK) { // socket
+            for(;;) {
+                ssize_t resp = syscall(SYS_READ, fd, cast(ssize_t) buf, cast(ssize_t) count);
+                if (resp == -EWOULDBLOCK || resp == -EAGAIN) {
+                    logf("READ GOT DELAYED - FD %d, resp = %d", fd, resp);
+                    reschedule(fd, currentFiber, EPOLLIN);
+                    continue;
+                }
+                else
+                    return withErrorno(resp);
+            }
+        } else { // file
+            aiocb myaiocb;
+            myaiocb.aio_fildes = fd;
+            myaiocb.aio_buf = buf;
+            myaiocb.aio_nbytes = count;
+            myaiocb.aio_sigevent.sigev_notify = SIGEV_SIGNAL;
+            myaiocb.aio_sigevent.sigev_signo = SI_SIGIO;
+            myaiocb.aio_sigevent.sigev_value = cast(sigval)fd;
+            aio_read(&myaiocb).checked;
+            int resp = aio_error(&myaiocb);
+            if (resp == EINPROGRESS) {
                 logf("READ GOT DELAYED - FD %d, resp = %d", fd, resp);
                 reschedule(fd, currentFiber, EPOLLIN);
-                continue;
             }
             else
                 return withErrorno(resp);
@@ -317,7 +341,7 @@ extern(C) ssize_t sendto(int sockfd, const void *buf, size_t len, int flags,
                 reschedule(sockfd, currentFiber, EPOLLIN);
                 continue;
             }
-            else 
+            else
                 return withErrorno(resp);
         }
         assert(0);
@@ -347,7 +371,7 @@ extern(C) ssize_t recv(int sockfd, const void *buf, size_t len, int flags)
                 reschedule(sockfd, currentFiber, EPOLLIN);
                 continue;
             }
-            else 
+            else
                 return withErrorno(resp);
         }
         assert(0);
@@ -428,6 +452,7 @@ void spawn(void delegate() func) {
 
 shared DescriptorState[] descriptors;
 shared int event_loop_fd;
+shared int signal_loop_fd;
 
 struct AwaitingFiber {
     Fiber fiber;
@@ -443,6 +468,7 @@ struct DescriptorState {
     }
     uint size;
     bool intercepted = false;
+    bool isSocket = false;
 
     void blockFiber(Fiber f, int op)
     {
@@ -496,6 +522,7 @@ struct DescriptorState {
 
 // intercept - a filter for file descriptor, changes flags and register on first use
 void interceptFd(int fd) {
+    logf("Hit interceptFD");
     if (fd < 0 || fd >= descriptors.length) return;
     if (!descriptors[fd].intercepted) {
         logf("First use, registering fd = %d", fd);
@@ -504,7 +531,11 @@ void interceptFd(int fd) {
         epoll_event event;
         event.events = EPOLLIN | EPOLLOUT; // TODO: most events that make sense to watch for
         event.data.fd = fd;
-        epoll_ctl(event_loop_fd, EPOLL_CTL_ADD, fd, &event).checked("ERROR: failed epoll_ctl add!");
+        //epoll_ctl(event_loop_fd, EPOLL_CTL_ADD, fd, &event).checked("ERROR: failed epoll_ctl add!");
+        if (epoll_ctl(event_loop_fd, EPOLL_CTL_ADD, fd, &event) == EPERM) {
+            logf("Detected real file FD, switching from epoll to aio");
+            descriptors[fd].isSocket = true;
+        }
         descriptors[fd].intercepted = true;
     }
     int flags = fcntl(fd, F_GETFL, 0);
@@ -515,12 +546,17 @@ void interceptFd(int fd) {
 }
 
 void interceptFdNoFcntl(int fd) {
+    logf("Hit interceptFdNoFcntl");
     if (fd < 0 || fd >= descriptors.length) return;
     if (!descriptors[fd].intercepted) {
         epoll_event event;
         event.events = EPOLLIN | EPOLLOUT; // TODO: most events that make sense to watch for
         event.data.fd = fd;
-        epoll_ctl(event_loop_fd, EPOLL_CTL_ADD, fd, &event).checked("ERROR: failed epoll_ctl add!");
+        //epoll_ctl(event_loop_fd, EPOLL_CTL_ADD, fd, &event).checked("ERROR: failed epoll_ctl add!");
+        if (epoll_ctl(event_loop_fd, EPOLL_CTL_ADD, fd, &event) == EPERM) {
+            logf("Detected real file FD, switching from epoll to aio");
+            descriptors[fd].isSocket = true;
+        }
         descriptors[fd].intercepted = true;
     }
 }
@@ -541,6 +577,10 @@ void startloop()
 {
     mtx = cast(shared)new Mutex();
     event_loop_fd = cast(int)epoll_create1(0).checked("ERROR: Failed to create event-loop!");
+    sigset_t mask;
+    sigemptyset(&mask);
+    sigaddset (&mask, SI_SIGIO);
+    signal_loop_fd = cast(int)signalfd(-1, &mask, 0).checked("ERROR: Failed to create signalfd!");
     ssize_t fdMax = sysconf(_SC_OPEN_MAX).checked;
     //descriptors = cast(shared)new DescriptorState[fdMax];
     descriptors = (cast(shared(DescriptorState*)) mmap(null, fdMax * DescriptorState.sizeof, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0))[0..fdMax];
