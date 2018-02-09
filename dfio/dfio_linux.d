@@ -246,8 +246,10 @@ extern(C) ssize_t read(int fd, void *buf, size_t count)
             myaiocb.aio_sigevent.sigev_notify = SIGEV_SIGNAL;
             myaiocb.aio_sigevent.sigev_signo = SI_SIGIO;
             myaiocb.aio_sigevent.sigev_value = cast(sigval)fd;
-            aio_read(&myaiocb).checked;
+            int r = aio_read(&myaiocb).checked;
+            logf("aio_read resp = %d", r);
             int resp = aio_error(&myaiocb);
+            logf("aio_error resp = %d" , resp);
             if (resp == EINPROGRESS) {
                 logf("READ GOT DELAYED - FD %d, resp = %d", fd, resp);
                 reschedule(fd, currentFiber, EPOLLIN);
@@ -532,6 +534,8 @@ void interceptFd(int fd) {
         if (epoll_ctl(event_loop_fd, EPOLL_CTL_ADD, fd, &event) == EPERM) {
             logf("Detected real file FD, switching from epoll to aio");
             descriptors[fd].isSocket = true;
+            event.data.fd = signal_loop_fd;
+            epoll_ctl(event_loop_fd, EPOLL_CTL_ADD, signal_loop_fd, &event).checked;
         }
         descriptors[fd].intercepted = true;
     }
@@ -553,6 +557,8 @@ void interceptFdNoFcntl(int fd) {
         if (epoll_ctl(event_loop_fd, EPOLL_CTL_ADD, fd, &event) == EPERM) {
             logf("Detected real file FD, switching from epoll to aio");
             descriptors[fd].isSocket = true;
+            event.data.fd = signal_loop_fd;
+            epoll_ctl(event_loop_fd, EPOLL_CTL_ADD, signal_loop_fd, &event).checked;
         }
         descriptors[fd].intercepted = true;
     }
@@ -587,6 +593,7 @@ void startloop()
 size_t processEvents()
 {
     epoll_event[MAX_EVENTS] events;
+    signalfd_siginfo fdsi;
     int r = epoll_wait(event_loop_fd, events.ptr, MAX_EVENTS, TIMEOUT)
         .checked("ERROR: failed epoll_wait");
     //debug stderr.writefln("Passed epoll_wait, r = %d", r);
@@ -594,8 +601,21 @@ size_t processEvents()
     for (int n = 0; n < r; n++) {
         int fd = events[n].data.fd;
         mtx.lock();
-        unblocked += descriptors[fd].unshared.unblockFibers(events[n].events);
+        if (fd == signal_loop_fd) {
+            logf("HIT");
+            ssize_t r2 = read(signal_loop_fd, &fdsi, signalfd_siginfo.sizeof);
+            if (r2 != signalfd_siginfo.sizeof)
+                checked(r2, "ERROR: failed read on signalfd");
+
+            if (fdsi.ssi_signo == SI_SIGIO) {
+                int fd2 = fdsi.ssi_fd;
+                unblocked += descriptors[fd2].unshared.unblockFibers(events[n].events);
+            }
+        } else {
+            unblocked += descriptors[fd].unshared.unblockFibers(events[n].events);
+        }
         mtx.unlock();
     }
+
     return unblocked;
 }
