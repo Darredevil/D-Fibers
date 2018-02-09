@@ -227,10 +227,7 @@ extern(C) ssize_t read(int fd, void *buf, size_t count)
         logf("HOOKED READ WITH MY LIB!"); // TODO: temporary for easy check, remove later
         interceptFd(fd);
 
-        stat_t stat;
-        fstat(fd, &stat);
-
-        if(stat.st_mode == S_IFSOCK) { // socket
+        if(descriptors[fd].isSocket) { // socket
             for(;;) {
                 ssize_t resp = syscall(SYS_READ, fd, cast(ssize_t) buf, cast(ssize_t) count);
                 if (resp == -EWOULDBLOCK || resp == -EAGAIN) {
