@@ -4,6 +4,7 @@ version(Windows):
 
 import core.sys.windows.core;
 import core.stdc.stdio;
+import core.stdc.stdlib;
 import std.container.dlist;
 import std.exception;
 import std.windows.syserror;
@@ -76,6 +77,7 @@ extern(Windows) UMS_CONTEXT* GetNextUmsListItem(UMS_CONTEXT* UmsContext);
 extern(Windows) BOOL ExecuteUmsThread(UMS_CONTEXT* UmsThread);
 extern(Windows) BOOL CreateUmsCompletionList(UMS_COMPLETION_LIST** UmsCompletionList);
 extern(Windows) BOOL CreateUmsThreadContext(UMS_CONTEXT** lpUmsThread);
+extern(Windows) BOOL DeleteUmsThreadContext(UMS_CONTEXT* UmsThread);
 extern(Windows) BOOL QueryUmsThreadInformation(
     UMS_CONTEXT*          UmsThread,
     UMS_THREAD_INFO_CLASS UmsThreadInfoClass,
@@ -113,15 +115,48 @@ extern(Windows) HANDLE CreateRemoteThreadEx(
   LPDWORD                      lpThreadId
 );
 
+enum STACK_SIZE_PARAM_IS_A_RESERVATION = 0x00010000;
+
 alias UmsSchedulerProc = extern(Windows) VOID function(UMS_SCHEDULER_REASON Reason, ULONG_PTR ActivationPayload, PVOID SchedulerParam);
 
+struct RingQueue(T)
+{
+    T* store;
+    size_t length;
+    size_t fetch, insert, size;
+    
+    this(size_t capacity)
+    {
+        store = cast(T*)malloc(T.sizeof * capacity);
+        length = capacity;
+        size = 0;
+    }
+
+    void push(T ctx)
+    {
+        store[insert++] = ctx;
+        if (insert == length) insert = 0;
+        size += 1;
+    }
+
+    T pop()
+    {
+        auto ret = store[fetch++];
+        if (fetch == length) fetch = 0;
+        size -= 1;
+        return ret;
+    }
+    bool empty(){ return size == 0; }
+}
+
 UMS_COMPLETION_LIST* completionList;
-DList!(UMS_CONTEXT*) queue;
+RingQueue!(UMS_CONTEXT*) queue;
 int activeThreads = 0;
 
 void startloop()
 {
     wenforce(CreateUmsCompletionList(&completionList), "failed to create UMS completion");
+    queue = RingQueue!(UMS_CONTEXT*)(100_000);
 }
 
 extern(Windows) uint worker(void* func)
@@ -147,8 +182,10 @@ void spawn(void delegate() func)
     umsAttrs.UmsCompletionList = completionList;
     umsAttrs.UmsContext = ctx;
     umsAttrs.UmsVersion = UMS_VERSION;
+    
     wenforce(UpdateProcThreadAttribute(attrList, 0, PROC_THREAD_ATTRIBUTE_UMS_THREAD, &umsAttrs, umsAttrs.sizeof, null, null), "failed to update pric thread");
-    wenforce(CreateRemoteThreadEx(GetCurrentProcess(), null, 0, &worker, &func, 0, attrList, null), "failed to create thread");
+    HANDLE handle = wenforce(CreateRemoteThreadEx(GetCurrentProcess(), null, 64*1024, &worker, &func,
+        0/*STACK_SIZE_PARAM_IS_A_RESERVATION*/, attrList, null), "failed to create thread");
     activeThreads += 1;
 }
 
@@ -159,6 +196,7 @@ void runFibers()
     info.CompletionList = completionList;
     info.SchedulerProc = &umsScheduler;
     info.SchedulerParam = null;
+    wenforce(SetThreadAffinityMask(GetCurrentThread(), 0x1), "failed to set affinity");
     wenforce(EnterUmsSchedulingMode(&info), "failed to enter UMS mode\n");
 }
 
@@ -173,7 +211,7 @@ void outputToConsole(const(wchar)[] msg)
 
 void logf(T...)(const(wchar)[] fmt, T args)
 {
-    try {
+    debug try {
         formattedWrite(&outputToConsole, fmt, args);
     }
     catch (Exception e) {
@@ -194,14 +232,13 @@ extern(Windows) VOID umsScheduler(UMS_SCHEDULER_REASON Reason, ULONG_PTR Activat
       while (ready != null)
       {
           logf("Dequeued UMS thread context: %x\n"w, ready);
-          queue.insertBack(ready);
+          queue.push(ready);
           ready = GetNextUmsListItem(ready);
       }
       while(!queue.empty)
       {
-        UMS_CONTEXT* ctx = queue.front;
+        UMS_CONTEXT* ctx = queue.pop;
         logf("Fetched thread context from our queue: %x\n", ctx);
-        queue.removeFront();
         BOOLEAN terminated;
         uint size;
         if(!QueryUmsThreadInformation(ctx, UMS_THREAD_INFO_CLASS.UmsThreadIsTerminated, &terminated, BOOLEAN.sizeof, &size))
@@ -213,7 +250,10 @@ extern(Windows) VOID umsScheduler(UMS_SCHEDULER_REASON Reason, ULONG_PTR Activat
         {
             auto ret = ExecuteUmsThread(ctx);
             if (ret == ERROR_RETRY) // this UMS thread is locked, try it later
-                queue.insertBack(ctx);
+            {
+                logf("Need retry!\n");
+                queue.push(ctx);
+            }
             else
             {
                 logf("Failed to execute thread: %d\n"w, GetLastError());
@@ -224,6 +264,7 @@ extern(Windows) VOID umsScheduler(UMS_SCHEDULER_REASON Reason, ULONG_PTR Activat
         {
             logf("Terminated: %x\n"w, ctx);
             //TODO: delete context or maybe cache them somewhere?
+            DeleteUmsThreadContext(ctx);
             activeThreads -= 1;
         }
       }
