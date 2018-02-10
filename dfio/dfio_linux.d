@@ -24,6 +24,7 @@ import core.sys.posix.sys.mman;
 import core.sys.posix.pthread;
 import core.sys.posix.aio;
 import core.sys.linux.sys.signalfd;
+import core.stdc.string : memset;
 
 Fiber currentFiber; // this is TLS per user thread
 
@@ -32,6 +33,8 @@ shared BlockingQueue!Fiber queue;
 shared Mutex mtx;
 
 enum int TIMEOUT = 1, MAX_EVENTS = 100;
+enum int SIGNAL = 42; // the range should be 32-64
+//enum int SIGNAL = SIGRTMIN + 1;
 
 enum int MSG_DONTWAIT = 0x40;
 
@@ -39,6 +42,17 @@ void logf(string file = __FILE__, int line = __LINE__, T...)(string msg, T args)
 {
     debug stderr.writefln(msg, args);
     debug stderr.writefln("\tat %s:%s:[LWP:%s]", file, line, pthread_self());
+}
+
+ssize_t sys_read(int fd, void *buf, size_t count) {
+    logf("Old school read");
+    return syscall(SYS_READ, fd, cast(ssize_t) buf, cast(ssize_t) count).withErrorno;
+}
+
+ssize_t sys_write(int fd, const void *buf, size_t count)
+{
+    logf("Old school write");
+    return syscall(SYS_WRITE, fd, cast(size_t) buf, count).withErrorno;
 }
 
 int checked(int value, const char* msg="unknown place") {
@@ -244,7 +258,7 @@ extern(C) ssize_t read(int fd, void *buf, size_t count)
             myaiocb.aio_buf = buf;
             myaiocb.aio_nbytes = count;
             myaiocb.aio_sigevent.sigev_notify = SIGEV_SIGNAL;
-            myaiocb.aio_sigevent.sigev_signo = SI_SIGIO;
+            myaiocb.aio_sigevent.sigev_signo = SIGNAL;
             myaiocb.aio_sigevent.sigev_value = cast(sigval)fd;
             int r = aio_read(&myaiocb).checked;
             logf("aio_read resp = %d", r);
@@ -576,13 +590,27 @@ void reschedule(int fd, Fiber fiber, int op) {
     Fiber.yield();
 }
 
+extern(C) void myhandle(int mysignal, siginfo_t *si, void* arg) {
+    printf("Signale intercepted, doing nothing\n");
+}
+
 void startloop()
 {
     mtx = cast(shared)new Mutex();
     event_loop_fd = cast(int)epoll_create1(0).checked("ERROR: Failed to create event-loop!");
     sigset_t mask;
     sigemptyset(&mask);
-    sigaddset (&mask, SI_SIGIO);
+    sigaddset (&mask, SIGNAL);
+
+    sigaction_t act;
+    memset(&act, 0, act.sizeof);
+    //act.sa_handler = SIG_IGN;
+    act.sa_sigaction = &myhandle;
+    act.sa_flags = SA_SIGINFO;
+    sigaction(SIGNAL, &act, null);
+    //sigprocmask(SIG_BLOCK, &mask, null).checked;
+    //pthread_sigmask(SIG_BLOCK, &mask, null).checked;
+    //signal(SIGNAL, SIG_IGN);
     signal_loop_fd = cast(int)signalfd(-1, &mask, 0).checked("ERROR: Failed to create signalfd!");
     ssize_t fdMax = sysconf(_SC_OPEN_MAX).checked;
     //descriptors = cast(shared)new DescriptorState[fdMax];
@@ -596,18 +624,24 @@ size_t processEvents()
     signalfd_siginfo fdsi;
     int r = epoll_wait(event_loop_fd, events.ptr, MAX_EVENTS, TIMEOUT)
         .checked("ERROR: failed epoll_wait");
+    logf("epoll_wait resp = %d", r);
+    //ssize_t r3 = sys_read(signal_loop_fd, &fdsi, signalfd_siginfo.sizeof);
+    //if (r3 != signalfd_siginfo.sizeof)
+    //    checked(r3, "ERROR: failed read on signalfd");
+    logf("signo = %d", fdsi.ssi_signo);
     //debug stderr.writefln("Passed epoll_wait, r = %d", r);
     size_t unblocked = 0;
     for (int n = 0; n < r; n++) {
         int fd = events[n].data.fd;
+        logf("fd = %d, signalfd = %d", fd, signal_loop_fd);
         mtx.lock();
         if (fd == signal_loop_fd) {
             logf("HIT");
-            ssize_t r2 = read(signal_loop_fd, &fdsi, signalfd_siginfo.sizeof);
+            ssize_t r2 = sys_read(signal_loop_fd, &fdsi, signalfd_siginfo.sizeof);
             if (r2 != signalfd_siginfo.sizeof)
                 checked(r2, "ERROR: failed read on signalfd");
 
-            if (fdsi.ssi_signo == SI_SIGIO) {
+            if (fdsi.ssi_signo == SIGNAL) {
                 int fd2 = fdsi.ssi_fd;
                 unblocked += descriptors[fd2].unshared.unblockFibers(events[n].events);
             }
