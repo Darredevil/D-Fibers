@@ -231,14 +231,14 @@ version (X86) {
     }
 }
 
-extern(C) ssize_t read(int fd, void *buf, size_t count)
+extern(C) private ssize_t read(int fd, void *buf, size_t count)
 {
     if (currentFiber is null) {
         logf("READ PASSTHROUGH!");
         return syscall(SYS_READ, fd, cast(ssize_t) buf, cast(ssize_t) count).withErrorno;
     }
     else {
-        logf("HOOKED READ WITH MY LIB!"); // TODO: temporary for easy check, remove later
+        logf("HOOKED READ WITH MY LIB fd=%d!", fd); // TODO: temporary for easy check, remove later
         interceptFd(fd);
 
         if(descriptors[fd].isSocket) { // socket
@@ -547,10 +547,10 @@ void interceptFd(int fd) {
         //epoll_ctl(event_loop_fd, EPOLL_CTL_ADD, fd, &event).checked("ERROR: failed epoll_ctl add!");
         if (epoll_ctl(event_loop_fd, EPOLL_CTL_ADD, fd, &event) == EPERM) {
             logf("Detected real file FD, switching from epoll to aio");
-            descriptors[fd].isSocket = true;
-            event.data.fd = signal_loop_fd;
-            epoll_ctl(event_loop_fd, EPOLL_CTL_ADD, signal_loop_fd, &event).checked;
+            descriptors[fd].isSocket = false;
         }
+        else 
+            descriptors[fd].isSocket = true;
         descriptors[fd].intercepted = true;
     }
     int flags = fcntl(fd, F_GETFL, 0);
@@ -602,16 +602,20 @@ void startloop()
     sigemptyset(&mask);
     sigaddset (&mask, SIGNAL);
 
-    sigaction_t act;
+    /*sigaction_t act;
     memset(&act, 0, act.sizeof);
     //act.sa_handler = SIG_IGN;
     act.sa_sigaction = &myhandle;
     act.sa_flags = SA_SIGINFO;
-    sigaction(SIGNAL, &act, null);
+    sigaction(SIGNAL, &act, null);*/
     //sigprocmask(SIG_BLOCK, &mask, null).checked;
-    //pthread_sigmask(SIG_BLOCK, &mask, null).checked;
+    pthread_sigmask(SIG_BLOCK, &mask, null).checked;
     //signal(SIGNAL, SIG_IGN);
     signal_loop_fd = cast(int)signalfd(-1, &mask, 0).checked("ERROR: Failed to create signalfd!");
+    epoll_event event;
+    event.events = EPOLLIN;
+    event.data.fd = signal_loop_fd;
+    epoll_ctl(event_loop_fd, EPOLL_CTL_ADD, signal_loop_fd, &event).checked;
     ssize_t fdMax = sysconf(_SC_OPEN_MAX).checked;
     //descriptors = cast(shared)new DescriptorState[fdMax];
     descriptors = (cast(shared(DescriptorState*)) mmap(null, fdMax * DescriptorState.sizeof, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0))[0..fdMax];
@@ -625,10 +629,6 @@ size_t processEvents()
     int r = epoll_wait(event_loop_fd, events.ptr, MAX_EVENTS, TIMEOUT)
         .checked("ERROR: failed epoll_wait");
     logf("epoll_wait resp = %d", r);
-    //ssize_t r3 = sys_read(signal_loop_fd, &fdsi, signalfd_siginfo.sizeof);
-    //if (r3 != signalfd_siginfo.sizeof)
-    //    checked(r3, "ERROR: failed read on signalfd");
-    logf("signo = %d", fdsi.ssi_signo);
     //debug stderr.writefln("Passed epoll_wait, r = %d", r);
     size_t unblocked = 0;
     for (int n = 0; n < r; n++) {
@@ -642,7 +642,7 @@ size_t processEvents()
                 checked(r2, "ERROR: failed read on signalfd");
 
             if (fdsi.ssi_signo == SIGNAL) {
-                int fd2 = fdsi.ssi_fd;
+                int fd2 = fdsi.ssi_int;
                 unblocked += descriptors[fd2].unshared.unblockFibers(events[n].events);
             }
         } else {
