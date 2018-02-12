@@ -269,14 +269,14 @@ extern(C) private ssize_t read(int fd, void *buf, size_t count)
     }
 }
 
-extern(C) ssize_t write(int fd, const void *buf, size_t count)
+extern(C) private ssize_t write(int fd, const void *buf, size_t count)
 {
     logf("HOOKED WRITE FD=%d!", fd);
     ssize_t resp = syscall(SYS_WRITE, fd, cast(size_t) buf, count);
     return withErrorno(resp);
 }
 
-extern(C) int accept(int sockfd, sockaddr *addr, socklen_t *addrlen)
+extern(C) private int accept(int sockfd, sockaddr *addr, socklen_t *addrlen)
 {
     if (currentFiber is null) {
         logf("ACCEPT PASSTHROUGH FD=%d", sockfd);
@@ -299,7 +299,7 @@ extern(C) int accept(int sockfd, sockaddr *addr, socklen_t *addrlen)
     }
 }
 
-extern(C) int accept4(int sockfd, sockaddr *addr, socklen_t *addrlen, int flags)
+extern(C) private int accept4(int sockfd, sockaddr *addr, socklen_t *addrlen, int flags)
 {
     logf("HOOKED ACCEPT4 WITH MY LIB!"); // TODO: temporary for easy check, remove later
 
@@ -307,7 +307,7 @@ extern(C) int accept4(int sockfd, sockaddr *addr, socklen_t *addrlen, int flags)
     return cast(int) withErrorno(ret);
 }
 
-extern(C) int connect(int sockfd, const sockaddr *addr, socklen_t *addrlen)
+extern(C) private int connect(int sockfd, const sockaddr *addr, socklen_t *addrlen)
 {
     if (currentFiber is null) {
         logf("CONNECT PASSTHROUGH!");
@@ -330,7 +330,7 @@ extern(C) int connect(int sockfd, const sockaddr *addr, socklen_t *addrlen)
     }
 }
 
-extern(C) ssize_t sendto(int sockfd, const void *buf, size_t len, int flags,
+extern(C) private ssize_t sendto(int sockfd, const void *buf, size_t len, int flags,
                       const sockaddr *dest_addr, socklen_t addrlen)
 {
     if (currentFiber is null) {
@@ -355,7 +355,7 @@ extern(C) ssize_t sendto(int sockfd, const void *buf, size_t len, int flags,
     }
 }
 
-extern(C) ssize_t recv(int sockfd, const void *buf, size_t len, int flags)
+extern(C) private ssize_t recv(int sockfd, const void *buf, size_t len, int flags)
 {
     sockaddr_in src_addr;
     src_addr.sin_family = AF_INET;
@@ -385,7 +385,7 @@ extern(C) ssize_t recv(int sockfd, const void *buf, size_t len, int flags)
     }
 }
 
-extern(C) ssize_t recvfrom(int sockfd, const void *buf, size_t len, int flags,
+extern(C) private ssize_t recvfrom(int sockfd, const void *buf, size_t len, int flags,
                       const sockaddr *src_addr, ssize_t* addrlen)
 {
     if (currentFiber is null) {
@@ -411,7 +411,7 @@ extern(C) ssize_t recvfrom(int sockfd, const void *buf, size_t len, int flags,
     }
 }
 
-extern(C) ssize_t close(int fd)
+extern(C) private ssize_t close(int fd)
 {
     logf("HOOKED CLOSE!");
     deregisterFd(fd);
