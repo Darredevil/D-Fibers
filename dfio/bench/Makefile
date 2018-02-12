@@ -5,6 +5,26 @@ build: hello-dlang \
 abc: ab.c
 	gcc -O2 ab.c -o abc -lpthread
 
+curl: curl.d
+	$(DC) $(DFLAGS) -I.. -c curl.d
+	$(DC) $(DFLAGS) curl.o  -L=../libdfio.so -L-rpath=.:../ -ofcurl
+
+curl-download: curl.d
+	$(DC) $(DFLAGS) -I.. -c curl-download.d
+	$(DC) $(DFLAGS) curl-download.o  -L=../libdfio.so -L-rpath=.:../ -ofcurl-download
+
+read-file: read-file.d
+	$(DC) $(DFLAGS) -I.. -c read-file.d
+	$(DC) $(DFLAGS) read-file.o  -L=../libdfio.so -L-rpath=.:../ -ofread-file
+
+write-file: write-file.d
+	$(DC) $(DFLAGS) -I.. -c write-file.d
+	$(DC) $(DFLAGS) write-file.o  -L=../libdfio.so -L-rpath=.:../ -ofwrite-file
+
+socket: socket.d
+	$(DC) $(DFLAGS) -I.. -c socket.d
+	$(DC) $(DFLAGS) socket.o  -L=../libdfio.so -L-rpath=.:../ -ofsocket
+
 hello-dlang: static_http/hello.d
 	$(DC) $(DFLAGS) -I.. -c static_http/hello.d -I../../http-parser.d/out/di ../../http-parser.d/out/http-parser.a
 	$(DC) $(DFLAGS) hello.o ../../http-parser.d/out/*.o  -L=../libdfio.so -L-rpath=.:../ -ofhello-dlang

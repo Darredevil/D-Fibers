@@ -1,4 +1,5 @@
-DFLAGS=-O -release -inline
+# DFLAGS=-O -release -inline
+DFLAGS=-debug -g -I~/workspace/dlang/druntime/import/ -O -release -inline
 export DFLAGS
 DC=dmd
 export DC
@@ -33,6 +34,30 @@ libdfio.so: dfio.d dfio_win.d dfio_linux.d BlockingQueue.o
 
 http-parser:
 	cd ../http-parser.d && git submodule update --init && make
+
+curl: libdfio.so
+	$(MAKE) -C bench curl
+
+curl-download: libdfio.so
+	$(MAKE) -C bench curl-download
+
+read-file: libdfio.so
+	$(MAKE) -C bench read-file
+
+write-file: libdfio.so
+	$(MAKE) -C bench write-file
+
+run-curl-download: curl-download
+	cd bench && ./curl-download
+
+run-read-file: read-file
+	cd bench && ./read-file
+
+run-write-file: write-file
+	cd bench && ./write-file
+
+socket: libdfio.so
+	$(MAKE) -C bench socket
 
 test-all: build-tests \
 	test-compiles_n_runs \
