@@ -240,7 +240,6 @@ extern(C) private ssize_t read(int fd, void *buf, size_t count)
     else {
         logf("HOOKED READ WITH MY LIB fd=%d!", fd); // TODO: temporary for easy check, remove later
         interceptFd(fd);
-
         if(descriptors[fd].isSocket) { // socket
             for(;;) {
                 ssize_t resp = syscall(SYS_READ, fd, cast(ssize_t) buf, cast(ssize_t) count);
@@ -260,16 +259,11 @@ extern(C) private ssize_t read(int fd, void *buf, size_t count)
             myaiocb.aio_sigevent.sigev_notify = SIGEV_SIGNAL;
             myaiocb.aio_sigevent.sigev_signo = SIGNAL;
             myaiocb.aio_sigevent.sigev_value = cast(sigval)fd;
-            int r = aio_read(&myaiocb).checked;
+            ssize_t r = aio_read(&myaiocb).checked;
+            reschedule(fd, currentFiber, EPOLLIN);
             logf("aio_read resp = %d", r);
-            int resp = aio_error(&myaiocb);
-            logf("aio_error resp = %d" , resp);
-            if (resp == EINPROGRESS) {
-                logf("READ GOT DELAYED - FD %d, resp = %d", fd, resp);
-                reschedule(fd, currentFiber, EPOLLIN);
-            }
-            else
-                return withErrorno(resp);
+            ssize_t resp = aio_return(&myaiocb);
+            return resp;
         }
         assert(0);
     }
@@ -545,7 +539,7 @@ void interceptFd(int fd) {
         event.events = EPOLLIN | EPOLLOUT; // TODO: most events that make sense to watch for
         event.data.fd = fd;
         //epoll_ctl(event_loop_fd, EPOLL_CTL_ADD, fd, &event).checked("ERROR: failed epoll_ctl add!");
-        if (epoll_ctl(event_loop_fd, EPOLL_CTL_ADD, fd, &event) == EPERM) {
+        if (epoll_ctl(event_loop_fd, EPOLL_CTL_ADD, fd, &event) < 0 && errno == EPERM) {
             logf("Detected real file FD, switching from epoll to aio");
             descriptors[fd].isSocket = false;
         }
@@ -568,12 +562,12 @@ void interceptFdNoFcntl(int fd) {
         event.events = EPOLLIN | EPOLLOUT; // TODO: most events that make sense to watch for
         event.data.fd = fd;
         //epoll_ctl(event_loop_fd, EPOLL_CTL_ADD, fd, &event).checked("ERROR: failed epoll_ctl add!");
-        if (epoll_ctl(event_loop_fd, EPOLL_CTL_ADD, fd, &event) == EPERM) {
+        if (epoll_ctl(event_loop_fd, EPOLL_CTL_ADD, fd, &event) < 0 && errno == EPERM) {
             logf("Detected real file FD, switching from epoll to aio");
-            descriptors[fd].isSocket = true;
-            event.data.fd = signal_loop_fd;
-            epoll_ctl(event_loop_fd, EPOLL_CTL_ADD, signal_loop_fd, &event).checked;
+            descriptors[fd].isSocket = false;
         }
+        else
+            descriptors[fd].isSocket = true;
         descriptors[fd].intercepted = true;
     }
 }
