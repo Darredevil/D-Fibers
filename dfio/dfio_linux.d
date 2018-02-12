@@ -616,7 +616,7 @@ void startloop()
 size_t processEvents()
 {
     epoll_event[MAX_EVENTS] events;
-    signalfd_siginfo fdsi;
+    signalfd_siginfo[20] fdsi;
     int r = epoll_wait(event_loop_fd, events.ptr, MAX_EVENTS, TIMEOUT)
         .checked("ERROR: failed epoll_wait");
     logf("epoll_wait resp = %d", r);
@@ -627,14 +627,16 @@ size_t processEvents()
         logf("fd = %d, signalfd = %d", fd, signal_loop_fd);
         mtx.lock();
         if (fd == signal_loop_fd) {
-            logf("HIT");
-            ssize_t r2 = sys_read(signal_loop_fd, &fdsi, signalfd_siginfo.sizeof);
-            if (r2 != signalfd_siginfo.sizeof)
+            logf("Intercepted our aio SIGNAL");
+            ssize_t r2 = sys_read(signal_loop_fd, &fdsi, fdsi.sizeof);
+            if (r2 % signalfd_siginfo.sizeof != 0)
                 checked(r2, "ERROR: failed read on signalfd");
 
-            if (fdsi.ssi_signo == SIGNAL) {
-                int fd2 = fdsi.ssi_int;
-                unblocked += descriptors[fd2].unshared.unblockFibers(events[n].events);
+            for(int i = 0; i < r2 / signalfd_siginfo.sizeof; i++) { //TODO: stress test multiple signals
+                if (fdsi[i].ssi_signo == SIGNAL) {
+                    int fd2 = fdsi[i].ssi_int;
+                    unblocked += descriptors[fd2].unshared.unblockFibers(events[n].events);
+                }
             }
         } else {
             unblocked += descriptors[fd].unshared.unblockFibers(events[n].events);
