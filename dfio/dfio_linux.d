@@ -271,9 +271,42 @@ extern(C) private ssize_t read(int fd, void *buf, size_t count)
 
 extern(C) private ssize_t write(int fd, const void *buf, size_t count)
 {
-    logf("HOOKED WRITE FD=%d!", fd);
-    ssize_t resp = syscall(SYS_WRITE, fd, cast(size_t) buf, count);
-    return withErrorno(resp);
+    if (currentFiber is null) {
+        logf("WRITE PASSTHROUGH!");
+        return syscall(SYS_WRITE, fd, cast(size_t) buf, count).withErrorno;
+    }
+    else {
+        logf("HOOKED WRITE FD=%d!", fd);
+        interceptFd(fd);
+        if(descriptors[fd].isSocket) { // socket
+            logf("Socket path");
+            for(;;) {
+                ssize_t resp = syscall(SYS_WRITE, fd, cast(ssize_t) buf, cast(ssize_t) count);
+                if (resp == -EWOULDBLOCK || resp == -EAGAIN) {
+                    logf("WRITE GOT DELAYED - FD %d, resp = %d", fd, resp);
+                    reschedule(fd, currentFiber, EPOLLOUT);
+                    continue;
+                }
+                else
+                    return withErrorno(resp);
+            }
+        } else { // file
+            logf("File path");
+            aiocb myaiocb;
+            myaiocb.aio_fildes = fd;
+            myaiocb.aio_buf = cast(void*)buf;
+            myaiocb.aio_nbytes = count;
+            myaiocb.aio_sigevent.sigev_notify = SIGEV_SIGNAL;
+            myaiocb.aio_sigevent.sigev_signo = SIGNAL;
+            myaiocb.aio_sigevent.sigev_value = cast(sigval)fd;
+            ssize_t r = aio_write(&myaiocb).checked;
+            reschedule(fd, currentFiber, EPOLLOUT);
+            logf("aio_write resp = %d", r);
+            ssize_t resp = aio_return(&myaiocb);
+            return resp;
+        }
+        assert(0);
+    }
 }
 
 extern(C) private int accept(int sockfd, sockaddr *addr, socklen_t *addrlen)
@@ -422,6 +455,7 @@ void runFibers()
 {
     int counter = 0;
     while (alive > 0) {
+        logf("while alive(%d) > 0", alive);
         //currentFiber = take(queue); // TODO implement take
         if (queue.tryPop(currentFiber)) {
             logf("Fiber %x started", cast(void*)currentFiber);
@@ -629,13 +663,17 @@ size_t processEvents()
         if (fd == signal_loop_fd) {
             logf("Intercepted our aio SIGNAL");
             ssize_t r2 = sys_read(signal_loop_fd, &fdsi, fdsi.sizeof);
+            logf("aio events = %d", r2 / signalfd_siginfo.sizeof);
             if (r2 % signalfd_siginfo.sizeof != 0)
                 checked(r2, "ERROR: failed read on signalfd");
 
             for(int i = 0; i < r2 / signalfd_siginfo.sizeof; i++) { //TODO: stress test multiple signals
+                logf("Processing aio event idx = %d", i);
                 if (fdsi[i].ssi_signo == SIGNAL) {
+                    logf("HIT our SIGNAL");
                     int fd2 = fdsi[i].ssi_int;
                     unblocked += descriptors[fd2].unshared.unblockFibers(events[n].events);
+                    logf("unblocked = %d", unblocked);
                 }
             }
         } else {
