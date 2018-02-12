@@ -538,13 +538,14 @@ void interceptFd(int fd) {
         epoll_event event;
         event.events = EPOLLIN | EPOLLOUT; // TODO: most events that make sense to watch for
         event.data.fd = fd;
-        //epoll_ctl(event_loop_fd, EPOLL_CTL_ADD, fd, &event).checked("ERROR: failed epoll_ctl add!");
         if (epoll_ctl(event_loop_fd, EPOLL_CTL_ADD, fd, &event) < 0 && errno == EPERM) {
             logf("Detected real file FD, switching from epoll to aio");
             descriptors[fd].isSocket = false;
         }
-        else 
+        else {
+            logf("isSocket = true");
             descriptors[fd].isSocket = true;
+        }
         descriptors[fd].intercepted = true;
     }
     int flags = fcntl(fd, F_GETFL, 0);
@@ -558,16 +559,18 @@ void interceptFdNoFcntl(int fd) {
     logf("Hit interceptFdNoFcntl");
     if (fd < 0 || fd >= descriptors.length) return;
     if (!descriptors[fd].intercepted) {
+        logf("First use, registering fd = %d", fd);
         epoll_event event;
         event.events = EPOLLIN | EPOLLOUT; // TODO: most events that make sense to watch for
         event.data.fd = fd;
-        //epoll_ctl(event_loop_fd, EPOLL_CTL_ADD, fd, &event).checked("ERROR: failed epoll_ctl add!");
         if (epoll_ctl(event_loop_fd, EPOLL_CTL_ADD, fd, &event) < 0 && errno == EPERM) {
             logf("Detected real file FD, switching from epoll to aio");
             descriptors[fd].isSocket = false;
         }
-        else
+        else {
+            logf("isSocket = true");
             descriptors[fd].isSocket = true;
+        }
         descriptors[fd].intercepted = true;
     }
 }
@@ -592,26 +595,20 @@ void startloop()
 {
     mtx = cast(shared)new Mutex();
     event_loop_fd = cast(int)epoll_create1(0).checked("ERROR: Failed to create event-loop!");
+
+    // use RT signals, disable default termination on signal received
     sigset_t mask;
     sigemptyset(&mask);
     sigaddset (&mask, SIGNAL);
-
-    /*sigaction_t act;
-    memset(&act, 0, act.sizeof);
-    //act.sa_handler = SIG_IGN;
-    act.sa_sigaction = &myhandle;
-    act.sa_flags = SA_SIGINFO;
-    sigaction(SIGNAL, &act, null);*/
-    //sigprocmask(SIG_BLOCK, &mask, null).checked;
     pthread_sigmask(SIG_BLOCK, &mask, null).checked;
-    //signal(SIGNAL, SIG_IGN);
     signal_loop_fd = cast(int)signalfd(-1, &mask, 0).checked("ERROR: Failed to create signalfd!");
+
     epoll_event event;
     event.events = EPOLLIN;
     event.data.fd = signal_loop_fd;
     epoll_ctl(event_loop_fd, EPOLL_CTL_ADD, signal_loop_fd, &event).checked;
+
     ssize_t fdMax = sysconf(_SC_OPEN_MAX).checked;
-    //descriptors = cast(shared)new DescriptorState[fdMax];
     descriptors = (cast(shared(DescriptorState*)) mmap(null, fdMax * DescriptorState.sizeof, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0))[0..fdMax];
     queue = new shared BlockingQueue!Fiber;
 }
