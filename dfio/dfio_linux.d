@@ -304,7 +304,8 @@ extern(C) private ssize_t write(int fd, const void *buf, size_t count)
             myaiocb.aio_sigevent.sigev_value = tmp;
             //myaiocb.aio_sigevent.sigev_value = cast(sigval)(cast(void*)currentFiber);
             ssize_t r = aio_write(&myaiocb).checked;
-            reschedule(fd, currentFiber, EPOLLOUT/* | EPOLLIN*/);
+            //reschedule(fd, currentFiber, EPOLLOUT/* | EPOLLIN*/);
+            currentFiber.yield();
             logf("aio_write resp = %d", r);
             ssize_t resp = aio_return(&myaiocb);
             return resp;
