@@ -149,9 +149,14 @@ struct RingQueue(T)
     bool empty(){ return size == 0; }
 }
 
-UMS_COMPLETION_LIST* completionList;
+__gshared UMS_COMPLETION_LIST* completionList;
 RingQueue!(UMS_CONTEXT*) queue;
 int activeThreads = 0;
+
+struct Functor
+{
+	void delegate() func;
+}
 
 void startloop()
 {
@@ -161,14 +166,13 @@ void startloop()
 
 extern(Windows) uint worker(void* func)
 {
-    auto dg = cast(void delegate()*)func;
-    (*dg)();
+    auto functor = *cast(Functor*)func;
+    functor.func();
     return 0;
 }
 
 void spawn(void delegate() func)
 {
-    import std.conv;
     ubyte[128] buf;
     size_t size = buf.length;
     PROC_THREAD_ATTRIBUTE_LIST* attrList = cast(PROC_THREAD_ATTRIBUTE_LIST*)buf.ptr;
@@ -183,9 +187,8 @@ void spawn(void delegate() func)
     umsAttrs.UmsContext = ctx;
     umsAttrs.UmsVersion = UMS_VERSION;
     
-    wenforce(UpdateProcThreadAttribute(attrList, 0, PROC_THREAD_ATTRIBUTE_UMS_THREAD, &umsAttrs, umsAttrs.sizeof, null, null), "failed to update pric thread");
-    HANDLE handle = wenforce(CreateRemoteThreadEx(GetCurrentProcess(), null, 64*1024, &worker, &func,
-        0/*STACK_SIZE_PARAM_IS_A_RESERVATION*/, attrList, null), "failed to create thread");
+    wenforce(UpdateProcThreadAttribute(attrList, 0, PROC_THREAD_ATTRIBUTE_UMS_THREAD, &umsAttrs, umsAttrs.sizeof, null, null), "failed to update proc thread");
+    HANDLE handle = wenforce(CreateRemoteThreadEx(GetCurrentProcess(), null, 0, &worker, new Functor(func), 0, attrList, null), "failed to create thread");
     activeThreads += 1;
 }
 
@@ -222,7 +225,7 @@ void logf(T...)(const(wchar)[] fmt, T args)
 extern(Windows) VOID umsScheduler(UMS_SCHEDULER_REASON Reason, ULONG_PTR ActivationPayload, PVOID SchedulerParam)
 {
     UMS_CONTEXT* ready;
-    logf("-----\nGot scheduled, reason: %d, completion list: %x\n"w, Reason, completionList);
+    logf("-----\nGot scheduled, reason: %d, completion list: %x, queue: %x\n"w, Reason, completionList, &queue);
     if(!DequeueUmsCompletionListItems(completionList, 0, &ready)){
         logf("Failed to dequeue ums workers!\n"w);
         return;

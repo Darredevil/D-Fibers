@@ -136,10 +136,15 @@ void server() {
     }
 
     while(true) {
-        logf("Waiting for server.accept()");
-        Socket client = server.accept();
-        logf("New client accepted %s", client);
-        processClient(client);
+        try {
+            logf("Waiting for server.accept()");
+            Socket client = server.accept();
+            logf("New client accepted %s", client);
+            processClient(client);
+        }
+        catch(Exception e) {
+            writefln("Failure to accept %s", e);
+        }
     }
 }
 
