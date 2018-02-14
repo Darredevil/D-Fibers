@@ -284,7 +284,7 @@ extern(C) private ssize_t write(int fd, const void *buf, size_t count)
                 ssize_t resp = syscall(SYS_WRITE, fd, cast(ssize_t) buf, cast(ssize_t) count);
                 if (resp == -EWOULDBLOCK || resp == -EAGAIN) {
                     logf("WRITE GOT DELAYED - FD %d, resp = %d", fd, resp);
-                    reschedule(fd, currentFiber, EPOLLOUT);
+                    reschedule(fd, currentFiber, EPOLLOUT/* | EPOLLIN*/);
                     continue;
                 }
                 else
@@ -298,9 +298,13 @@ extern(C) private ssize_t write(int fd, const void *buf, size_t count)
             myaiocb.aio_nbytes = count;
             myaiocb.aio_sigevent.sigev_notify = SIGEV_SIGNAL;
             myaiocb.aio_sigevent.sigev_signo = SIGNAL;
-            myaiocb.aio_sigevent.sigev_value = cast(sigval)fd;
+            //myaiocb.aio_sigevent.sigev_value = cast(sigval)fd;
+            sigval tmp;
+            tmp.sival_ptr = cast(void*)currentFiber;
+            myaiocb.aio_sigevent.sigev_value = tmp;
+            //myaiocb.aio_sigevent.sigev_value = cast(sigval)(cast(void*)currentFiber);
             ssize_t r = aio_write(&myaiocb).checked;
-            reschedule(fd, currentFiber, EPOLLOUT);
+            reschedule(fd, currentFiber, EPOLLOUT/* | EPOLLIN*/);
             logf("aio_write resp = %d", r);
             ssize_t resp = aio_return(&myaiocb);
             return resp;
@@ -671,8 +675,10 @@ size_t processEvents()
                 logf("Processing aio event idx = %d", i);
                 if (fdsi[i].ssi_signo == SIGNAL) {
                     logf("HIT our SIGNAL");
-                    int fd2 = fdsi[i].ssi_int;
-                    unblocked += descriptors[fd2].unshared.unblockFibers(events[n].events);
+                    //int fd2 = fdsi[i].ssi_int;
+                    //unblocked += descriptors[fd2].unshared.unblockFibers(events[n].events);
+                    queue.push(cast(Fiber)(cast(void*)fdsi[i].ssi_ptr));
+                    unblocked += 1;
                     logf("unblocked = %d", unblocked);
                 }
             }
