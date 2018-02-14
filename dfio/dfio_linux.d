@@ -360,7 +360,7 @@ extern(C) private int connect(int sockfd, const sockaddr *addr, socklen_t *addrl
         interceptFd(sockfd);
         for(;;) {
             ssize_t resp = syscall(SYS_CONNECT, sockfd, cast(size_t) addr, cast(size_t) addrlen);
-            if (resp == -EWOULDBLOCK || resp == -EAGAIN) {
+            if (resp == -EINPROGRESS || resp == -EAGAIN) {
                 logf("CONNECT GOT DELAYED - sockfd %d, resp = %d", sockfd, resp);
                 reschedule(sockfd, currentFiber, EPOLLIN);
                 continue;
