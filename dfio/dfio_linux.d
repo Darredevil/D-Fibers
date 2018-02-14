@@ -258,9 +258,13 @@ extern(C) private ssize_t read(int fd, void *buf, size_t count)
             myaiocb.aio_nbytes = count;
             myaiocb.aio_sigevent.sigev_notify = SIGEV_SIGNAL;
             myaiocb.aio_sigevent.sigev_signo = SIGNAL;
-            myaiocb.aio_sigevent.sigev_value = cast(sigval)fd;
+            //myaiocb.aio_sigevent.sigev_value = cast(sigval)fd;
+            sigval tmp;
+            tmp.sival_ptr = cast(void*)currentFiber;
+            myaiocb.aio_sigevent.sigev_value = tmp;
             ssize_t r = aio_read(&myaiocb).checked;
-            reschedule(fd, currentFiber, EPOLLIN);
+            //reschedule(fd, currentFiber, EPOLLIN);
+            currentFiber.yield();
             logf("aio_read resp = %d", r);
             ssize_t resp = aio_return(&myaiocb);
             return resp;
