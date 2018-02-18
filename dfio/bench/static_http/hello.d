@@ -53,7 +53,6 @@ void writeDate(Output, D)(ref Output sink, D date){
 
 void server_worker(Socket client) {
     ubyte[1024] buffer;
-
     scope(exit) {
         client.shutdown(SocketShutdown.BOTH);
         client.close();
@@ -126,7 +125,7 @@ void server_worker(Socket client) {
 void server() {
     Socket server = new TcpSocket();
     server.setOption(SocketOptionLevel.SOCKET, SocketOption.REUSEADDR, true);
-    server.bind(new InternetAddress("localhost", 8080));
+    server.bind(new InternetAddress("0.0.0.0", 8080));
     server.listen(1000);
 
     logf("Started server");
@@ -149,6 +148,7 @@ void server() {
 }
 
 void main() {
+    version(Windows) GC.disable(); // temporary for Win64 UMS threading
     startloop();
     spawn(() => server());
     runFibers();
