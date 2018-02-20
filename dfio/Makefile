@@ -1,4 +1,4 @@
-# DFLAGS=-O -release -inline
+# DFLAGS=-O -release -inline -I~/workspace/dlang/druntime/import/
 DFLAGS=-debug -g -I~/workspace/dlang/druntime/import/ -O -release -inline
 export DFLAGS
 DC=dmd
@@ -46,6 +46,12 @@ read-file: libdfio.so
 
 write-file: libdfio.so
 	$(MAKE) -C bench write-file
+
+server-dlang: libdfio.so http-parser
+	$(MAKE) -C bench server-dlang
+
+run-server-dlang: server-dlang
+	cd bench && ./server-dlang
 
 run-curl-download: curl-download
 	cd bench && ./curl-download

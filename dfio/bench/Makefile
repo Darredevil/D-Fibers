@@ -25,6 +25,10 @@ socket: socket.d
 	$(DC) $(DFLAGS) -I.. -c socket.d
 	$(DC) $(DFLAGS) socket.o  -L=../libdfio.so -L-rpath=.:../ -ofsocket
 
+server-dlang: server/server.d
+	$(DC) $(DFLAGS) -I.. -c server/server.d -I../../http-parser.d/out/di ../../http-parser.d/out/http-parser.a
+	$(DC) $(DFLAGS) server.o ../../http-parser.d/out/*.o  -L=../libdfio.so -L-rpath=.:../ -ofserver-dlang
+
 hello-dlang: static_http/hello.d
 	$(DC) $(DFLAGS) -I.. -c static_http/hello.d -I../../http-parser.d/out/di ../../http-parser.d/out/http-parser.a
 	$(DC) $(DFLAGS) hello.o ../../http-parser.d/out/*.o  -L=../libdfio.so -L-rpath=.:../ -ofhello-dlang

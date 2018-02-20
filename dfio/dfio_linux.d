@@ -464,7 +464,7 @@ void runFibers()
 {
     int counter = 0;
     while (alive > 0) {
-        logf("while alive(%d) > 0", alive);
+        //logf("while alive(%d) > 0", alive);
         //currentFiber = take(queue); // TODO implement take
         if (queue.tryPop(currentFiber)) {
             logf("Fiber %x started", cast(void*)currentFiber);
@@ -662,12 +662,12 @@ size_t processEvents()
     signalfd_siginfo[20] fdsi;
     int r = epoll_wait(event_loop_fd, events.ptr, MAX_EVENTS, TIMEOUT)
         .checked("ERROR: failed epoll_wait");
-    logf("epoll_wait resp = %d", r);
+    //logf("epoll_wait resp = %d", r);
     //debug stderr.writefln("Passed epoll_wait, r = %d", r);
     size_t unblocked = 0;
     for (int n = 0; n < r; n++) {
         int fd = events[n].data.fd;
-        logf("fd = %d, signalfd = %d", fd, signal_loop_fd);
+        //logf("fd = %d, signalfd = %d", fd, signal_loop_fd);
         mtx.lock();
         if (fd == signal_loop_fd) {
             logf("Intercepted our aio SIGNAL");
