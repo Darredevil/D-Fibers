@@ -53,7 +53,6 @@ void writeDate(Output, D)(ref Output sink, D date){
 
 void server_worker(Socket client) {
     ubyte[1024] buffer;
-
     scope(exit) {
         client.shutdown(SocketShutdown.BOTH);
         client.close();
@@ -126,7 +125,7 @@ void server_worker(Socket client) {
 void server() {
     Socket server = new TcpSocket();
     server.setOption(SocketOptionLevel.SOCKET, SocketOption.REUSEADDR, true);
-    server.bind(new InternetAddress("localhost", 8080));
+    server.bind(new InternetAddress("0.0.0.0", 8080));
     server.listen(1000);
 
     logf("Started server");
@@ -136,14 +135,20 @@ void server() {
     }
 
     while(true) {
-        logf("Waiting for server.accept()");
-        Socket client = server.accept();
-        logf("New client accepted %s", client);
-        processClient(client);
+        try {
+            logf("Waiting for server.accept()");
+            Socket client = server.accept();
+            logf("New client accepted %s", client);
+            processClient(client);
+        }
+        catch(Exception e) {
+            writefln("Failure to accept %s", e);
+        }
     }
 }
 
 void main() {
+    version(Windows) GC.disable(); // temporary for Win64 UMS threading
     startloop();
     spawn(() => server());
     runFibers();

@@ -3,10 +3,15 @@ module dfio_win;
 version(Windows):
 
 import core.sys.windows.core;
+import core.atomic;
+import core.internal.spinlock;
 import core.stdc.stdio;
+import core.stdc.stdlib;
+import core.thread;
 import std.container.dlist;
 import std.exception;
 import std.windows.syserror;
+import std.random;
 
 //opaque structs
 struct UMS_COMPLETION_LIST;
@@ -76,6 +81,7 @@ extern(Windows) UMS_CONTEXT* GetNextUmsListItem(UMS_CONTEXT* UmsContext);
 extern(Windows) BOOL ExecuteUmsThread(UMS_CONTEXT* UmsThread);
 extern(Windows) BOOL CreateUmsCompletionList(UMS_COMPLETION_LIST** UmsCompletionList);
 extern(Windows) BOOL CreateUmsThreadContext(UMS_CONTEXT** lpUmsThread);
+extern(Windows) BOOL DeleteUmsThreadContext(UMS_CONTEXT* UmsThread);
 extern(Windows) BOOL QueryUmsThreadInformation(
     UMS_CONTEXT*          UmsThread,
     UMS_THREAD_INFO_CLASS UmsThreadInfoClass,
@@ -113,28 +119,84 @@ extern(Windows) HANDLE CreateRemoteThreadEx(
   LPDWORD                      lpThreadId
 );
 
+enum STACK_SIZE_PARAM_IS_A_RESERVATION = 0x00010000;
+
 alias UmsSchedulerProc = extern(Windows) VOID function(UMS_SCHEDULER_REASON Reason, ULONG_PTR ActivationPayload, PVOID SchedulerParam);
 
-UMS_COMPLETION_LIST* completionList;
-DList!(UMS_CONTEXT*) queue;
-int activeThreads = 0;
+struct RingQueue(T)
+{
+    T* store;
+    size_t length;
+    size_t fetch, insert, size;
+    
+    this(size_t capacity)
+    {
+        store = cast(T*)malloc(T.sizeof * capacity);
+        length = capacity;
+        size = 0;
+    }
+
+    void push(T ctx)
+    {
+        store[insert++] = ctx;
+        if (insert == length) insert = 0;
+        size += 1;
+    }
+
+    T pop()
+    {
+        auto ret = store[fetch++];
+        if (fetch == length) fetch = 0;
+        size -= 1;
+        return ret;
+    }
+    bool empty(){ return size == 0; }
+}
+
+struct SchedulerBlock
+{
+    AlignedSpinLock lock; // lock around the queue
+    UMS_COMPLETION_LIST* completionList;
+    RingQueue!(UMS_CONTEXT*) queue; // queue has the number of outstanding threads
+    shared uint assigned; // total assigned UMS threads
+
+    this(int size)
+    {
+        lock = AlignedSpinLock(SpinLock.Contention.brief);
+        queue = RingQueue!(UMS_CONTEXT*)(size);
+        wenforce(CreateUmsCompletionList(&completionList), "failed to create UMS completion");
+    }
+}
+
+__gshared SchedulerBlock[] scheds;
+shared uint activeThreads;
+size_t schedNum; // (TLS) number of scheduler
+
+struct Functor
+{
+	void delegate() func;
+}
 
 void startloop()
 {
-    wenforce(CreateUmsCompletionList(&completionList), "failed to create UMS completion");
+    import core.cpuid;
+    uint threads = threadsPerCPU;
+    scheds = new SchedulerBlock[threads];
+    foreach (ref sched; scheds)
+        sched = SchedulerBlock(100_000);
 }
+
 
 extern(Windows) uint worker(void* func)
 {
-    auto dg = cast(void delegate()*)func;
-    (*dg)();
+    auto functor = *cast(Functor*)func;
+    functor.func();
     return 0;
 }
 
 void spawn(void delegate() func)
 {
-    import std.conv;
-    ubyte[128] buf;
+    ubyte[128] buf = void;
     size_t size = buf.length;
     PROC_THREAD_ATTRIBUTE_LIST* attrList = cast(PROC_THREAD_ATTRIBUTE_LIST*)buf.ptr;
     wenforce(InitializeProcThreadAttributeList(attrList, 1, 0, &size), "failed to initialize proc thread");
@@ -143,23 +205,37 @@ void spawn(void delegate() func)
     UMS_CONTEXT* ctx;
     wenforce(CreateUmsThreadContext(&ctx), "failed to create UMS context");
 
+    // power of 2 random choices:
+    size_t a = uniform!"[)"(0, scheds.length);
+    size_t b = uniform!"[)"(0, scheds.length);
+    uint loadA = scheds[a].assigned; // take into account active queue.size?
+    uint loadB = scheds[b].assigned; // ditto
+    if (loadA < loadB) atomicOp!"+="(scheds[a].assigned, 1);
+    else atomicOp!"+="(scheds[b].assigned, 1);
     UMS_CREATE_THREAD_ATTRIBUTES umsAttrs;
-    umsAttrs.UmsCompletionList = completionList;
+    umsAttrs.UmsCompletionList = loadA < loadB ? scheds[a].completionList : scheds[b].completionList;
     umsAttrs.UmsContext = ctx;
     umsAttrs.UmsVersion = UMS_VERSION;
-    wenforce(UpdateProcThreadAttribute(attrList, 0, PROC_THREAD_ATTRIBUTE_UMS_THREAD, &umsAttrs, umsAttrs.sizeof, null, null), "failed to update pric thread");
-    wenforce(CreateRemoteThreadEx(GetCurrentProcess(), null, 0, &worker, &func, 0, attrList, null), "failed to create thread");
-    activeThreads += 1;
+
+    wenforce(UpdateProcThreadAttribute(attrList, 0, PROC_THREAD_ATTRIBUTE_UMS_THREAD, &umsAttrs, umsAttrs.sizeof, null, null), "failed to update proc thread");
+    HANDLE handle = wenforce(CreateRemoteThreadEx(GetCurrentProcess(), null, 0, &worker, new Functor(func), 0, attrList, null), "failed to create thread");
+    atomicOp!"+="(activeThreads, 1);
 }
 
 void runFibers()
 {
-    UMS_SCHEDULER_STARTUP_INFO info;
-    info.UmsVersion = UMS_VERSION;
-    info.CompletionList = completionList;
-    info.SchedulerProc = &umsScheduler;
-    info.SchedulerParam = null;
-    wenforce(EnterUmsSchedulingMode(&info), "failed to enter UMS mode\n");
+    Thread runThread(size_t n){ // damned D lexical capture "semantics"
+        auto t = new Thread(() => schedulerEntry(n));
+        t.start();
+        return t; 
+    }
+    Thread[] threads = new Thread[scheds.length-1];
+    foreach (i; 0..threads.length){
+        threads[i] = runThread(i+1);
+    }
+    schedulerEntry(0);
+    foreach (t; threads)
+        t.join();
 }
 
 import std.format;
@@ -173,7 +249,7 @@ void outputToConsole(const(wchar)[] msg)
 
 void logf(T...)(const(wchar)[] fmt, T args)
 {
-    try {
+    debug try {
         formattedWrite(&outputToConsole, fmt, args);
     }
     catch (Exception e) {
@@ -181,27 +257,43 @@ void logf(T...)(const(wchar)[] fmt, T args)
     }
 }
 
+
+void schedulerEntry(size_t n)
+{
+    schedNum = n;
+    UMS_SCHEDULER_STARTUP_INFO info;
+    info.UmsVersion = UMS_VERSION;
+    info.CompletionList = scheds[n].completionList;
+    info.SchedulerProc = &umsScheduler;
+    info.SchedulerParam = null;
+    wenforce(SetThreadAffinityMask(GetCurrentThread(), 1<<n), "failed to set affinity");
+    wenforce(EnterUmsSchedulingMode(&info), "failed to enter UMS mode\n");
+}
+
 extern(Windows) VOID umsScheduler(UMS_SCHEDULER_REASON Reason, ULONG_PTR ActivationPayload, PVOID SchedulerParam)
 {
     UMS_CONTEXT* ready;
-    logf("-----\nGot scheduled, reason: %d, completion list: %x\n"w, Reason, completionList);
+    auto completionList = scheds[schedNum].completionList;
+       logf("-----\nGot scheduled, reason: %d, schedNum: %x\n"w, Reason, schedNum);
     if(!DequeueUmsCompletionListItems(completionList, 0, &ready)){
         logf("Failed to dequeue ums workers!\n"w);
         return;
     }    
     for (;;)
     {
+      scheds[schedNum].lock.lock();
+      auto queue = &scheds[schedNum].queue; // struct, so take a ref
       while (ready != null)
       {
           logf("Dequeued UMS thread context: %x\n"w, ready);
-          queue.insertBack(ready);
+          queue.push(ready);
           ready = GetNextUmsListItem(ready);
       }
+      scheds[schedNum].lock.unlock();
       while(!queue.empty)
       {
-        UMS_CONTEXT* ctx = queue.front;
+        UMS_CONTEXT* ctx = queue.pop;
         logf("Fetched thread context from our queue: %x\n", ctx);
-        queue.removeFront();
         BOOLEAN terminated;
         uint size;
         if(!QueryUmsThreadInformation(ctx, UMS_THREAD_INFO_CLASS.UmsThreadIsTerminated, &terminated, BOOLEAN.sizeof, &size))
@@ -213,7 +305,10 @@ extern(Windows) VOID umsScheduler(UMS_SCHEDULER_REASON Reason, ULONG_PTR Activat
         {
             auto ret = ExecuteUmsThread(ctx);
             if (ret == ERROR_RETRY) // this UMS thread is locked, try it later
-                queue.insertBack(ctx);
+            {
+                logf("Need retry!\n");
+                queue.push(ctx);
+            }
             else
             {
                 logf("Failed to execute thread: %d\n"w, GetLastError());
@@ -224,7 +319,9 @@ extern(Windows) VOID umsScheduler(UMS_SCHEDULER_REASON Reason, ULONG_PTR Activat
         {
             logf("Terminated: %x\n"w, ctx);
             //TODO: delete context or maybe cache them somewhere?
-            activeThreads -= 1;
+            DeleteUmsThreadContext(ctx);
+            atomicOp!"-="(scheds[schedNum].assigned, 1);
+            atomicOp!"-="(activeThreads, 1);
         }
       }
       if (activeThreads == 0)
