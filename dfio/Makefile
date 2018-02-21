@@ -74,6 +74,9 @@ test-all: build-tests \
 	test-ping_pong_full_duplex_8 \
 	test-ping_pong_full_duplex_20
 
+test-poll_timer: build-tests
+	cd tests && ./poll_timer
+
 test-compiles_n_runs: build-tests
 	cd tests && ./compiles_n_runs
 

@@ -3,6 +3,7 @@ build: compiles_n_runs \
 	ping_pong_thread_half_duplex \
 	ping_pong_full_duplex \
 	ping_pong_full_duplex_n \
+	poll_timer \
 	echo_server
 
 compiles_n_runs: compiles_n_runs.d
@@ -24,6 +25,10 @@ ping_pong_full_duplex: ping_pong_full_duplex.d
 ping_pong_full_duplex_n: ping_pong_full_duplex_n.d
 	$(DC) $(DFLAGS) -I.. -c ping_pong_full_duplex_n.d
 	$(DC) $(DFLAGS) ping_pong_full_duplex_n.o -L=../libdfio.so -L-rpath=.:../
+
+poll_timer: poll_timer.d
+	$(DC) $(DFLAGS) -I.. -c poll_timer
+	$(DC) $(DFLAGS) poll_timer.o -L=../libdfio.so -L-rpath=.:../
 
 echo_server: echo_server.d
 	$(DC) $(DFLAGS) -I.. -c echo_server.d -I../../http-parser.d/out/di ../../http-parser.d/out/http-parser.a

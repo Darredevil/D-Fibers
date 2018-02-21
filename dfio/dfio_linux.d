@@ -10,9 +10,11 @@ import core.thread;
 import std.container.dlist;
 import core.sys.posix.sys.types;
 import core.sys.posix.sys.socket;
+import core.sys.posix.poll;
 import core.sys.posix.netinet.in_;
 import core.sys.posix.unistd;
 import core.sys.linux.epoll;
+import core.sys.linux.timerfd;
 import core.sync.mutex;
 import core.stdc.errno;
 import core.atomic;
@@ -53,6 +55,12 @@ ssize_t sys_write(int fd, const void *buf, size_t count)
 {
     logf("Old school write");
     return syscall(SYS_WRITE, fd, cast(size_t) buf, count).withErrorno;
+}
+
+int sys_poll(pollfd *fds, nfds_t nfds, int timeout)
+{
+    logf("Old school poll");
+    return cast(int)    syscall(SYS_POLL, cast(size_t)fds, cast(size_t) nfds, timeout).withErrorno;
 }
 
 int checked(int value, const char* msg="unknown place") {
@@ -139,6 +147,7 @@ version (X86) {
         SYS_READ = 0x0,
         SYS_WRITE = 0x1,
         SYS_CLOSE = 3,
+        SYS_POLL = 7,
         SYS_SOCKETPAIR = 0x35,
         SYS_ACCEPT = 0x2b,
         SYS_ACCEPT4 = 0x120,
@@ -460,6 +469,61 @@ extern(C) private ssize_t close(int fd)
     return cast(int)withErrorno(syscall(SYS_CLOSE, fd));
 }
 
+void ms2ts(timespec *ts, ulong ms)
+{
+    ts.tv_sec = ms / 1000;
+    ts.tv_nsec = (ms % 1000) * 1000000;
+}
+
+extern(C) private int poll(pollfd *fds, nfds_t nfds, int timeout)
+{
+    if (currentFiber is null) {
+        logf("POLL PASSTHROUGH!");
+        return cast(int)syscall(SYS_POLL, cast(size_t)fds, cast(size_t)nfds, timeout).withErrorno;
+    }
+    else {
+        logf("HOOKED POLL");
+        if (timeout <= 0) return sys_poll(fds, nfds, timeout); // the easy way out, also handle incorrect values
+
+        // 1. register all fds if not already
+        // 2. attach this fiber to all fds
+        foreach (ref fd; fds[0..nfds]) {
+            interceptFd(fd.fd);
+            descriptors[fd.fd].unshared.blockFiber(currentFiber, fd.events); // POLL and EPOLL flags seem to align nicely
+        }
+        // 3. set the timerfd  (we may cache timerfd setup)
+        int timerfd = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
+        timespec ts_timeout;
+        ms2ts(&ts_timeout, timeout); //convert miliseconds to timespec
+        itimerspec its;
+        its.it_value = ts_timeout;
+        its.it_interval.tv_sec = 0;
+        its.it_interval.tv_nsec = 0;
+        timerfd_settime(timerfd, 0, &its, null);
+        interceptFd(timerfd);
+        descriptors[timerfd].unshared.blockFiber(currentFiber, EPOLLIN);
+        // 4. yeild - eventloop will get to us eventually :)
+        Fiber.yield();
+
+        //4.1 disarm the timerfd
+        its.it_value.tv_sec = 0;
+        its.it_value.tv_nsec = 0;
+        timerfd_settime(timerfd, 0, &its, null);
+
+        close(timerfd);
+
+        //4.2 remove current fiber from descriptors
+        foreach (ref fd; fds[0..nfds]) {
+            descriptors[fd.fd].unshared.removeFiber(currentFiber);
+        }
+
+        // Here is the tricky part - we need to get which FDs are ready
+        // the "easy" way out is to just call 'poll' again
+        // 5. Get the state of fds - nonblocking
+        return sys_poll(fds, nfds, 0);
+    }
+}
+
 void runFibers()
 {
     int counter = 0;
@@ -519,6 +583,35 @@ struct DescriptorState {
     uint size;
     bool intercepted = false;
     bool isSocket = false;
+
+    void removeFiber(Fiber f)
+    {
+        if (size == 0) return;
+        else if (size == 1) size = 0;
+        else {
+            size_t j = 0;
+            for (size_t i = 0; i<waiters.length;) {
+                auto a = waiters[i];
+                // TODO: exceptions (errors)
+                if (a.fiber == f) {
+                    i++;
+                }
+                else {
+                    waiters[j] = waiters[i];
+                    j++;
+                    i++;
+                }
+            }
+            waiters = waiters[0..j];
+            size = cast(uint)j;
+            if (size == 1) {
+                single = waiters[0];
+                waiters = null;
+            }
+            else
+                waiters.assumeSafeAppend();
+        }
+    }
 
     void blockFiber(Fiber f, int op)
     {
