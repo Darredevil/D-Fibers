@@ -8,7 +8,7 @@ import dfio;
 
 void main()
 {
-    read(0,null,0uL); //test hook works
+    core.sys.posix.unistd.read(0,null,0uL); //test hook works
 
     auto t1 = new Thread(() {
        //...

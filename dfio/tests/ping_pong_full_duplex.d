@@ -26,7 +26,7 @@ void writerReader(int fd1, int fd2) {
     ssize_t total = 17;
     ssize_t bytes = 0;
     while(bytes < total) {
-        ssize_t resp = read(fd2, buf2.ptr + bytes, total - bytes).checked;
+        ssize_t resp = core.sys.posix.unistd.read(fd2, buf2.ptr + bytes, total - bytes).checked;
         logf("read1 resp = %s", resp);
         bytes += resp;
     }
@@ -41,7 +41,7 @@ void readerWriter(int fd1, int fd2) {
     ssize_t total = 17;
     ssize_t bytes = 0;
     while(bytes < total) {
-        ssize_t resp = read(fd1, buf.ptr + bytes, total - bytes).checked;
+        ssize_t resp = core.sys.posix.unistd.read(fd1, buf.ptr + bytes, total - bytes).checked;
         logf("read2 resp = %s", resp);
         bytes += resp;
     }

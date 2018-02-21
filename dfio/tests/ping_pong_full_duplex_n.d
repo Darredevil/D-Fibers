@@ -32,7 +32,7 @@ void writerReader(int fd, string toSend, string toRecv) {
     ssize_t total = toRecv.length;
     ssize_t bytes = 0;
     while(bytes < total) {
-        ssize_t resp = read(fd, buf2.ptr + bytes, total - bytes).checked;
+        ssize_t resp = core.sys.posix.unistd.read(fd, buf2.ptr + bytes, total - bytes).checked;
         logf("read1 resp = %s", resp);
         bytes += resp;
     }
@@ -50,7 +50,7 @@ void readerWriter(int fd, string toSend, string toRecv) {
     ssize_t total = toRecv.length;
     ssize_t bytes = 0;
     while(bytes < total) {
-        ssize_t resp = read(fd, buf.ptr + bytes, total - bytes).checked;
+        ssize_t resp = core.sys.posix.unistd.read(fd, buf.ptr + bytes, total - bytes).checked;
         logf("read2 resp = %s", resp);
         bytes += resp;
     }

@@ -29,7 +29,7 @@ void reader(int fd) {
     ssize_t total = 17;
     ssize_t bytes = 0;
     while(bytes < total) {
-        ssize_t resp = read(fd, buf.ptr + bytes, total - bytes).checked;
+        ssize_t resp = core.sys.posix.unistd.read(fd, buf.ptr + bytes, total - bytes).checked;
         logf("read resp = %s", resp);
         bytes += resp;
     }
