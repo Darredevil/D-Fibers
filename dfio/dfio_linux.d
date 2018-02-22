@@ -19,6 +19,7 @@ import core.sync.mutex;
 import core.stdc.errno;
 import core.atomic;
 import BlockingQueue : BlockingQueue, unshared;
+import ObjectPool : ObjectPool, TimerFD;
 import core.sys.posix.stdlib: abort;
 import core.sys.posix.fcntl;
 import core.memory;
@@ -32,7 +33,9 @@ Fiber currentFiber; // this is TLS per user thread
 
 shared int alive; // count of non-terminated Fibers
 shared BlockingQueue!Fiber queue;
+shared ObjectPool!TimerFD timerFdPool;
 shared Mutex mtx;
+shared int[int] timerfd_cache;
 
 enum int TIMEOUT = 1, MAX_EVENTS = 100;
 enum int SIGNAL = 42; // the range should be 32-64
@@ -469,12 +472,6 @@ extern(C) private ssize_t close(int fd)
     return cast(int)withErrorno(syscall(SYS_CLOSE, fd));
 }
 
-void ms2ts(timespec *ts, ulong ms)
-{
-    ts.tv_sec = ms / 1000;
-    ts.tv_nsec = (ms % 1000) * 1000000;
-}
-
 extern(C) private int poll(pollfd *fds, nfds_t nfds, int timeout)
 {
     if (currentFiber is null) {
@@ -483,43 +480,24 @@ extern(C) private int poll(pollfd *fds, nfds_t nfds, int timeout)
     }
     else {
         logf("HOOKED POLL");
-        if (timeout <= 0) return sys_poll(fds, nfds, timeout); // the easy way out, also handle incorrect values
+        if (timeout <= 0) return sys_poll(fds, nfds, timeout);
 
-        // 1. register all fds if not already
-        // 2. attach this fiber to all fds
         foreach (ref fd; fds[0..nfds]) {
             interceptFd(fd.fd);
-            descriptors[fd.fd].unshared.blockFiber(currentFiber, fd.events); // POLL and EPOLL flags seem to align nicely
+            descriptors[fd.fd].unshared.blockFiber(currentFiber, fd.events);
         }
-        // 3. set the timerfd  (we may cache timerfd setup)
-        int timerfd = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
-        timespec ts_timeout;
-        ms2ts(&ts_timeout, timeout); //convert miliseconds to timespec
-        itimerspec its;
-        its.it_value = ts_timeout;
-        its.it_interval.tv_sec = 0;
-        its.it_interval.tv_nsec = 0;
-        timerfd_settime(timerfd, 0, &its, null);
+        TimerFD tfd = timerFdPool.getObject();
+        int timerfd = tfd.getFD();
+        tfd.armTimer(timeout);
         interceptFd(timerfd);
         descriptors[timerfd].unshared.blockFiber(currentFiber, EPOLLIN);
-        // 4. yeild - eventloop will get to us eventually :)
         Fiber.yield();
 
-        //4.1 disarm the timerfd
-        its.it_value.tv_sec = 0;
-        its.it_value.tv_nsec = 0;
-        timerfd_settime(timerfd, 0, &its, null);
-
-        close(timerfd);
-
-        //4.2 remove current fiber from descriptors
+        timerFdPool.releaseObject(tfd);
         foreach (ref fd; fds[0..nfds]) {
             descriptors[fd.fd].unshared.removeFiber(currentFiber);
         }
 
-        // Here is the tricky part - we need to get which FDs are ready
-        // the "easy" way out is to just call 'poll' again
-        // 5. Get the state of fds - nonblocking
         return sys_poll(fds, nfds, 0);
     }
 }
@@ -747,6 +725,7 @@ void startloop()
     ssize_t fdMax = sysconf(_SC_OPEN_MAX).checked;
     descriptors = (cast(shared(DescriptorState*)) mmap(null, fdMax * DescriptorState.sizeof, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0))[0..fdMax];
     queue = new shared BlockingQueue!Fiber;
+    timerFdPool = new shared ObjectPool!TimerFD;
 }
 
 size_t processEvents()

@@ -4,7 +4,7 @@ export DFLAGS
 DC=dmd
 export DC
 
-build-tests: libdfio.so BlockingQueue.o http-parser
+build-tests: libdfio.so BlockingQueue.o ObjectPool.o http-parser
 	$(MAKE) -C tests
 
 bench: libdfio.so BlockingQueue.o http-parser
@@ -24,12 +24,16 @@ simple-bench-go:
 simple-bench-js:
 	$(MAKE) -C bench simple-bench-js
 
-BlockingQueue.o:
+BlockingQueue.o: BlockingQueue.d
+	dmd -unittest -main -run BlockingQueue.d
 	$(DC) $(DFLAGS) -c BlockingQueue.d
 
-libdfio.so: dfio.d dfio_win.d dfio_linux.d BlockingQueue.o
+ObjectPool.o: ObjectPool.d
+	$(DC) $(DFLAGS) -c ObjectPool.d
+
+libdfio.so: dfio.d dfio_win.d dfio_linux.d BlockingQueue.o ObjectPool.o
 	$(DC) $(DFLAGS) -c dfio.d dfio_win.d dfio_linux.d
-	$(DC) $(DFLAGS) -L-rpath=dfio -shared -oflibdfio.so dfio.o dfio_linux.o dfio_win.o BlockingQueue.o
+	$(DC) $(DFLAGS) -L-rpath=dfio -shared -oflibdfio.so dfio.o dfio_linux.o dfio_win.o BlockingQueue.o ObjectPool.o
 	cp libdfio.so tests/
 
 http-parser:
