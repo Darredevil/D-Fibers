@@ -19,7 +19,7 @@ shared class BlockingQueue(T) : WorkQueue!T {
     private shared Condition cond;
     private shared DList!T queue;
 
-     this() {
+    this() {
         cond = cast(shared)(new Condition(new Mutex));
     }
 
@@ -44,7 +44,6 @@ shared class BlockingQueue(T) : WorkQueue!T {
         cond.unshared.mutex.lock();
         scope(exit) cond.unshared.mutex.unlock();
         if (queue.unshared.empty) {
-
             return false;
         }
         item = queue.unshared.front;
