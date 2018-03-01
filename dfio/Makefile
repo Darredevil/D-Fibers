@@ -1,5 +1,4 @@
-# DFLAGS=-O -release -inline -I~/workspace/dlang/druntime/import/
-DFLAGS=-debug -g -I~/workspace/dlang/druntime/import/ -O -release -inline
+DFLAGS=-g -O -release -inline
 export DFLAGS
 DC=dmd
 export DC
