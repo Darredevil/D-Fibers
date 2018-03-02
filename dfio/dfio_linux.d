@@ -18,7 +18,7 @@ import core.sys.linux.timerfd;
 import core.sync.mutex;
 import core.stdc.errno;
 import core.atomic;
-import BlockingQueue : BlockingQueue, unshared;
+import BlockingQueue;
 import ObjectPool : ObjectPool, TimerFD;
 import core.sys.posix.stdlib: abort;
 import core.sys.posix.fcntl;
@@ -29,10 +29,25 @@ import core.sys.posix.aio;
 import core.sys.linux.sys.signalfd;
 import core.stdc.string : memset;
 
-Fiber currentFiber; // this is TLS per user thread
+class FiberExt : Fiber { 
+    FiberExt next;
+
+    enum PAGESIZE = 4096;
+    
+    this(void function() fn, size_t sz = PAGESIZE*4, size_t guardPageSize = PAGESIZE ) nothrow {
+        super(fn, sz, guardPageSize);
+    }
+
+    this(void delegate() dg, size_t sz = PAGESIZE*4, size_t guardPageSize = PAGESIZE ) nothrow {
+        super(dg, sz, guardPageSize);
+    }
+}
+
+FiberExt currentFiber; // this is TLS per user thread
 
 shared int alive; // count of non-terminated Fibers
-shared BlockingQueue!Fiber queue;
+
+shared IntrusiveQueue!FiberExt queue;
 shared ObjectPool!TimerFD timerFdPool;
 shared Mutex mtx;
 shared int[int] timerfd_cache;
@@ -165,7 +180,7 @@ version (X86) {
         asm
         {
             mov RAX, ident;
-            mov RDI, n[RBP];
+            mov RDI, n;
             syscall;
             mov ret, RAX;
         }
@@ -179,9 +194,9 @@ version (X86) {
         asm
         {
             mov RAX, ident;
-            mov RDI, n[RBP];
-            mov RSI, arg1[RBP];
-            mov RDX, arg2[RBP];
+            mov RDI, n;
+            mov RSI, arg1;
+            mov RDX, arg2;
             syscall;
             mov ret, RAX;
         }
@@ -195,10 +210,10 @@ version (X86) {
         asm
         {
             mov RAX, ident;
-            mov RDI, n[RBP];
-            mov RSI, arg1[RBP];
-            mov RDX, arg2[RBP];
-            mov R10, arg3[RBP];
+            mov RDI, n;
+            mov RSI, arg1;
+            mov RDX, arg2;
+            mov R10, arg3;
             syscall;
             mov ret, RAX;
         }
@@ -212,11 +227,11 @@ version (X86) {
         asm
         {
             mov RAX, ident;
-            mov RDI, n[RBP];
-            mov RSI, arg1[RBP];
-            mov RDX, arg2[RBP];
-            mov R10, arg3[RBP];
-            mov R8, arg4[RBP];
+            mov RDI, n;
+            mov RSI, arg1;
+            mov RDX, arg2;
+            mov R10, arg3;
+            mov R8, arg4;
             syscall;
             mov ret, RAX;
         }
@@ -230,12 +245,12 @@ version (X86) {
         asm
         {
             mov RAX, ident;
-            mov RDI, n[RBP];
-            mov RSI, arg1[RBP];
-            mov RDX, arg2[RBP];
-            mov R10, arg3[RBP];
-            mov R8, arg4[RBP];
-            mov R9, arg5[RBP];
+            mov RDI, n;
+            mov RSI, arg1;
+            mov RDX, arg2;
+            mov R10, arg3;
+            mov R8, arg4;
+            mov R9, arg5;
             syscall;
             mov ret, RAX;
         }
@@ -509,10 +524,11 @@ void runFibers()
         //logf("while alive(%d) > 0", alive);
         //currentFiber = take(queue); // TODO implement take
         if (queue.tryPop(currentFiber)) {
-            logf("Fiber %x started", cast(void*)currentFiber);
+            logf("FiberExt %x started", cast(void*)currentFiber);
+            if (currentFiber is null) abort();
             currentFiber.call();
-            if (currentFiber.state == Fiber.State.TERM) {
-                logf("Fiber %s terminated", cast(void*)currentFiber);
+            if (currentFiber.state == FiberExt.State.TERM) {
+                logf("FiberExt %s terminated", cast(void*)currentFiber);
                 atomicOp!"-="(alive, 1);
             }
         }
@@ -537,7 +553,7 @@ void runFibers()
 }
 
 void spawn(void delegate() func) {
-    auto f = new Fiber(func);
+    auto f = new FiberExt(func);
     queue.push(f);
     atomicOp!"+="(alive, 1);
 }
@@ -547,7 +563,7 @@ shared int event_loop_fd;
 shared int signal_loop_fd;
 
 struct AwaitingFiber {
-    Fiber fiber;
+    FiberExt fiber;
     int op; // EPOLLIN = reading & EPOLLOUT = writing
 }
 
@@ -562,7 +578,7 @@ struct DescriptorState {
     bool intercepted = false;
     bool isSocket = false;
 
-    void removeFiber(Fiber f)
+    void removeFiber(FiberExt f)
     {
         if (size == 0) return;
         else if (size == 1) size = 0;
@@ -591,7 +607,7 @@ struct DescriptorState {
         }
     }
 
-    void blockFiber(Fiber f, int op)
+    void blockFiber(FiberExt f, int op)
     {
         if (size == 0)
             single = AwaitingFiber(currentFiber, op);
@@ -607,7 +623,7 @@ struct DescriptorState {
         uint unblocked;
         if (size == 1) {
             if ((single.op & event) != 0) {
-                queue.push(cast(Fiber)(single.fiber));
+                queue.push(cast(FiberExt)(single.fiber));
                 size = 0;
                 unblocked += 1;
             }
@@ -618,7 +634,7 @@ struct DescriptorState {
                 auto a = waiters[i];
                 // TODO: exceptions (errors)
                 if ((a.op & event) != 0) {
-                    queue.push(cast(Fiber)(a.fiber));
+                    queue.push(cast(FiberExt)(a.fiber));
                     unblocked += 1;
                     i++;
                 }
@@ -694,11 +710,11 @@ void deregisterFd(int fd) {
 }
 
 // reschedule - put fiber in a wait list, and get back to scheduling loop
-void reschedule(int fd, Fiber fiber, int op) {
+void reschedule(int fd, FiberExt fiber, int op) {
     mtx.lock();
     descriptors[fd].unshared.blockFiber(currentFiber, op);
     mtx.unlock();
-    Fiber.yield();
+    FiberExt.yield();
 }
 
 extern(C) void myhandle(int mysignal, siginfo_t *si, void* arg) {
@@ -724,7 +740,6 @@ void startloop()
 
     ssize_t fdMax = sysconf(_SC_OPEN_MAX).checked;
     descriptors = (cast(shared(DescriptorState*)) mmap(null, fdMax * DescriptorState.sizeof, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0))[0..fdMax];
-    queue = new shared BlockingQueue!Fiber;
     timerFdPool = new shared ObjectPool!TimerFD;
 }
 
@@ -754,7 +769,7 @@ size_t processEvents()
                     logf("HIT our SIGNAL");
                     //int fd2 = fdsi[i].ssi_int;
                     //unblocked += descriptors[fd2].unshared.unblockFibers(events[n].events);
-                    queue.push(cast(Fiber)(cast(void*)fdsi[i].ssi_ptr));
+                    queue.push(cast(FiberExt)(cast(void*)fdsi[i].ssi_ptr));
                     unblocked += 1;
                     logf("unblocked = %d", unblocked);
                 }

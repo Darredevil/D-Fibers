@@ -1,5 +1,6 @@
 module BlockingQueue;
 
+import core.internal.spinlock;
 import std.container : DList;
 import core.sync.condition;
 import std.stdio;
@@ -97,4 +98,66 @@ unittest
     prod.start();
     prod.join();
     cons.join();
+}
+
+shared struct IntrusiveQueue(T) 
+if (is(T : Object)) {
+    SpinLock lock = SpinLock(SpinLock.Contention.brief);
+    T head;
+    T tail;
+
+    void push(T item) nothrow {
+        lock.lock();
+        item.next = null;
+        scope(exit) lock.unlock();
+        if (tail is null) head = tail = cast(shared)item;
+        else {
+            tail.next = cast(shared)item;
+            tail = cast(shared)item;
+        }
+    }
+
+    bool tryPop(ref T item) nothrow {
+        lock.lock();
+        scope(exit) lock.unlock();
+        if (!head)
+            return false;
+        else {
+            item = head.unshared;
+            head = head.next;
+            if (head is null) tail = null;
+            return true;
+        }
+    }
+}
+
+class Box(T) {
+    Box next;
+    T item;
+    this(T k) {
+        item = k;
+    }
+}
+
+unittest {
+    shared q = IntrusiveQueue!(Box!int)();
+    q.push(new Box!int(1));
+    q.push(new Box!int(2));
+    q.push(new Box!int(3));
+    Box!int ret;
+    q.tryPop(ret);
+    assert(ret.item == 1);
+    q.tryPop(ret);
+    assert(ret.item == 2);
+
+    q.push(new Box!int(4));
+    q.tryPop(ret);
+    assert(ret.item == 3);
+    q.tryPop(ret);
+    assert(ret.item == 4);
+    q.push(new Box!int(5));
+
+    q.tryPop(ret);
+    assert(ret.item == 5);
+    assert(q.tryPop(ret) == false);
 }
