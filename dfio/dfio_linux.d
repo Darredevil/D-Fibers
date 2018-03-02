@@ -31,15 +31,23 @@ import core.stdc.string : memset;
 
 class FiberExt : Fiber { 
     FiberExt next;
+    uint numScheduler;
 
     enum PAGESIZE = 4096;
     
-    this(void function() fn, size_t sz = PAGESIZE*4, size_t guardPageSize = PAGESIZE ) nothrow {
-        super(fn, sz, guardPageSize);
+    this(void function() fn, uint numSched) nothrow {
+        super(fn);
+        numScheduler = numSched;
     }
 
-    this(void delegate() dg, size_t sz = PAGESIZE*4, size_t guardPageSize = PAGESIZE ) nothrow {
-        super(dg, sz, guardPageSize);
+    this(void delegate() dg, uint numSched) nothrow {
+        super(dg);
+        numScheduler = numSched;
+    }
+
+    void schedule()
+    {
+        scheds[numScheduler].queue.push(this);
     }
 }
 
@@ -47,10 +55,17 @@ FiberExt currentFiber; // this is TLS per user thread
 
 shared int alive; // count of non-terminated Fibers
 
-shared IntrusiveQueue!FiberExt queue;
+struct SchedulerBlock {
+    shared IntrusiveQueue!FiberExt queue;
+    shared uint assigned;
+    size_t[3] padding;
+}
+
+static assert(SchedulerBlock.sizeof == 64);
+
+__gshared SchedulerBlock[] scheds;
 shared ObjectPool!TimerFD timerFdPool;
 shared Mutex mtx;
-shared int[int] timerfd_cache;
 
 enum int TIMEOUT = 1, MAX_EVENTS = 100;
 enum int SIGNAL = 42; // the range should be 32-64
@@ -517,24 +532,25 @@ extern(C) private int poll(pollfd *fds, nfds_t nfds, int timeout)
     }
 }
 
-void runFibers()
+void schedulerEntry(size_t n)
 {
     int counter = 0;
     while (alive > 0) {
-        //logf("while alive(%d) > 0", alive);
-        //currentFiber = take(queue); // TODO implement take
-        if (queue.tryPop(currentFiber)) {
-            logf("FiberExt %x started", cast(void*)currentFiber);
-            if (currentFiber is null) abort();
-            currentFiber.call();
+        if (scheds[n].queue.tryPop(currentFiber)) {
+            logf("Fiber %x started", cast(void*)currentFiber);
+            try {
+                currentFiber.call();
+            }
+            catch (Exception e) {
+                stderr.writeln(e);
+                atomicOp!"-="(alive, 1);
+            }
             if (currentFiber.state == FiberExt.State.TERM) {
-                logf("FiberExt %s terminated", cast(void*)currentFiber);
+                logf("Fiber %s terminated", cast(void*)currentFiber);
                 atomicOp!"-="(alive, 1);
             }
         }
         else {
-             // TODO: only one thread should process events at the same time
-             // should use tryLock pattern of sorts
             if (processEvents() == 0) {
                 // TODO: wouldn't need to progressively sleep once we do edge-triggered eventloop
                 if (counter < 10) {
@@ -553,8 +569,17 @@ void runFibers()
 }
 
 void spawn(void delegate() func) {
-    auto f = new FiberExt(func);
-    queue.push(f);
+    import std.random;
+    uint a = uniform!"[)"(0, cast(uint)scheds.length);
+    uint b = uniform!"[)"(0, cast(uint)scheds.length);
+    uint loadA = scheds[a].assigned;
+    uint loadB = scheds[b].assigned;
+    uint choice;
+    if (loadA < loadB) choice = a;
+    else choice = b;
+    atomicOp!"+="(scheds[choice].assigned, 1);
+    auto f = new FiberExt(func, choice);
+    f.schedule();
     atomicOp!"+="(alive, 1);
 }
 
@@ -586,7 +611,6 @@ struct DescriptorState {
             size_t j = 0;
             for (size_t i = 0; i<waiters.length;) {
                 auto a = waiters[i];
-                // TODO: exceptions (errors)
                 if (a.fiber == f) {
                     i++;
                 }
@@ -623,7 +647,7 @@ struct DescriptorState {
         uint unblocked;
         if (size == 1) {
             if ((single.op & event) != 0) {
-                queue.push(cast(FiberExt)(single.fiber));
+                single.fiber.schedule();
                 size = 0;
                 unblocked += 1;
             }
@@ -632,9 +656,8 @@ struct DescriptorState {
             size_t j = 0;
             for (size_t i = 0; i<waiters.length;) {
                 auto a = waiters[i];
-                // TODO: exceptions (errors)
                 if ((a.op & event) != 0) {
-                    queue.push(cast(FiberExt)(a.fiber));
+                    a.fiber.schedule();
                     unblocked += 1;
                     i++;
                 }
@@ -681,7 +704,6 @@ void interceptFd(int fd) {
     int flags = fcntl(fd, F_GETFL, 0);
     if (!(flags & O_NONBLOCK)) {
         logf("WARNING: Socket (%d) not set in O_NONBLOCK mode!", fd);
-        //abort(); //TODO: enforce abort?
     }
 }
 
@@ -717,12 +739,11 @@ void reschedule(int fd, FiberExt fiber, int op) {
     FiberExt.yield();
 }
 
-extern(C) void myhandle(int mysignal, siginfo_t *si, void* arg) {
-    printf("Signale intercepted, doing nothing\n");
-}
-
 void startloop()
 {
+    import core.cpuid;
+    import core.cpuid;
+    uint threads = threadsPerCPU;
     mtx = cast(shared)new Mutex();
     event_loop_fd = cast(int)epoll_create1(0).checked("ERROR: Failed to create event-loop!");
 
@@ -741,6 +762,7 @@ void startloop()
     ssize_t fdMax = sysconf(_SC_OPEN_MAX).checked;
     descriptors = (cast(shared(DescriptorState*)) mmap(null, fdMax * DescriptorState.sizeof, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0))[0..fdMax];
     timerFdPool = new shared ObjectPool!TimerFD;
+    scheds = new SchedulerBlock[threads];
 }
 
 size_t processEvents()
@@ -769,7 +791,8 @@ size_t processEvents()
                     logf("HIT our SIGNAL");
                     //int fd2 = fdsi[i].ssi_int;
                     //unblocked += descriptors[fd2].unshared.unblockFibers(events[n].events);
-                    queue.push(cast(FiberExt)(cast(void*)fdsi[i].ssi_ptr));
+                    auto fiber = cast(FiberExt)cast(void*)fdsi[i].ssi_ptr;
+                    fiber.schedule();
                     unblocked += 1;
                     logf("unblocked = %d", unblocked);
                 }

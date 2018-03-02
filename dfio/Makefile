@@ -9,12 +9,12 @@ build-tests: libdfio.so BlockingQueue.o ObjectPool.o http-parser
 bench: libdfio.so BlockingQueue.o http-parser
 	$(MAKE) -C bench
 
-simple-bench: libdfio.so BlockingQueue.o http-parser
+simple-bench: libdfio.so http-parser
 	$(MAKE) -C bench simple-bench
 
 simple-bench-ldc: DC=ldmd2
 simple-bench-ldc: DFLAGS=-O3 -O4 -O5 -release -link-defaultlib-shared
-simple-bench-ldc: libdfio.so BlockingQueue.o http-parser
+simple-bench-ldc: libdfio.so http-parser
 	$(MAKE) -C bench simple-bench-ldc
 
 simple-bench-go:
