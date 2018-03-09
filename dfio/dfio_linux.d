@@ -65,7 +65,6 @@ static assert(SchedulerBlock.sizeof == 64);
 
 __gshared SchedulerBlock[] scheds;
 shared ObjectPool!TimerFD timerFdPool;
-shared Mutex mtx;
 
 enum int TIMEOUT = 1, MAX_EVENTS = 100;
 enum int SIGNAL = 42; // the range should be 32-64
@@ -275,10 +274,10 @@ version (X86) {
 
 extern(C) private ssize_t read(int fd, void *buf, size_t count)
 {
-    if (currentFiber is null) {
+//    if (currentFiber is null) {
         logf("READ PASSTHROUGH!");
         return syscall(SYS_READ, fd, cast(ssize_t) buf, cast(ssize_t) count).withErrorno;
-    }
+/*    }
     else {
         logf("HOOKED READ WITH MY LIB fd=%d!", fd); // TODO: temporary for easy check, remove later
         interceptFd(fd);
@@ -312,15 +311,15 @@ extern(C) private ssize_t read(int fd, void *buf, size_t count)
             return resp;
         }
         assert(0);
-    }
+    }*/
 }
 
 extern(C) private ssize_t write(int fd, const void *buf, size_t count)
 {
-    if (currentFiber is null) {
+//    if (currentFiber is null) {
         logf("WRITE PASSTHROUGH!");
         return syscall(SYS_WRITE, fd, cast(size_t) buf, count).withErrorno;
-    }
+/+    }
     else {
         logf("HOOKED WRITE FD=%d!", fd);
         interceptFd(fd);
@@ -357,46 +356,25 @@ extern(C) private ssize_t write(int fd, const void *buf, size_t count)
             return resp;
         }
         assert(0);
-    }
+    }+/
 }
 
-extern(C) private int accept(int sockfd, sockaddr *addr, socklen_t *addrlen)
+extern(C) private ssize_t accept(int sockfd, sockaddr *addr, socklen_t *addrlen)
 {
-    if (currentFiber is null) {
-        logf("ACCEPT PASSTHROUGH FD=%d", sockfd);
-        ssize_t resp = cast(int)syscall(SYS_ACCEPT, sockfd, cast(size_t) addr, cast(size_t) addrlen);
-        return cast(int)withErrorno(resp);
-    }
-    else {
-        logf("HOOKED ACCEPT FD=%d", sockfd); // TODO: temporary for easy check, remove later
-        interceptFd(sockfd);
-        for(;;) {
-            ssize_t resp = syscall(SYS_ACCEPT, sockfd, cast(size_t) addr, cast(size_t) addrlen);
-            if (resp == -EWOULDBLOCK || resp == -EAGAIN) {
-                logf("ACCEPT GOT DELAYED - sockfd %d, resp = %d", sockfd, resp);
-                reschedule(sockfd, currentFiber, EPOLLIN);
-                continue;
-            }
-            return cast(int)withErrorno(resp);
-        }
-        assert(0);
-    }
+    return acceptSyscall!("accept", SYS_ACCEPT, EWOULDBLOCK)(sockfd, cast(size_t) addr, cast(size_t) addrlen);    
 }
 
-extern(C) private int accept4(int sockfd, sockaddr *addr, socklen_t *addrlen, int flags)
+extern(C) private ssize_t accept4(int sockfd, sockaddr *addr, socklen_t *addrlen, int flags)
 {
-    logf("HOOKED ACCEPT4 WITH MY LIB!"); // TODO: temporary for easy check, remove later
-
-    ssize_t ret = syscall(SYS_ACCEPT4, sockfd, cast(size_t) addr, cast(size_t) addrlen, flags);
-    return cast(int) withErrorno(ret);
+    return acceptSyscall!("accept4", SYS_ACCEPT4, EWOULDBLOCK)(sockfd, cast(size_t) addr, cast(size_t) addrlen, flags);
 }
 
 extern(C) private int connect(int sockfd, const sockaddr *addr, socklen_t *addrlen)
 {
-    if (currentFiber is null) {
+    //if (currentFiber is null) {
         logf("CONNECT PASSTHROUGH!");
         return cast(int)syscall(SYS_CONNECT, sockfd, cast(size_t) addr, cast(size_t) addrlen).withErrorno;
-    }
+    /*}
     else {
         logf("HOOKED CONNECT WITH MY LIB!"); // TODO: temporary for easy check, remove later
         interceptFd(sockfd);
@@ -411,16 +389,16 @@ extern(C) private int connect(int sockfd, const sockaddr *addr, socklen_t *addrl
                 return cast(int)withErrorno(resp);
         }
         assert(0);
-    }
+    }*/
 }
 
 extern(C) private ssize_t sendto(int sockfd, const void *buf, size_t len, int flags,
                       const sockaddr *dest_addr, socklen_t addrlen)
 {
-    if (currentFiber is null) {
+    //if (currentFiber is null) {
         logf("SENDTO PASSTHROUGH!");
         return cast(int)syscall(SYS_SENDTO, sockfd, cast(size_t) dest_addr, cast(size_t) addrlen).withErrorno;
-    }
+    /*}
     else {
         logf("HOOKED SENDTO WITH MY LIB!"); // TODO: temporary for easy check, remove later
         interceptFdNoFcntl(sockfd);
@@ -436,63 +414,107 @@ extern(C) private ssize_t sendto(int sockfd, const void *buf, size_t len, int fl
                 return withErrorno(resp);
         }
         assert(0);
-    }
+    }*/
 }
 
-extern(C) private ssize_t recv(int sockfd, const void *buf, size_t len, int flags)
-{
+extern(C) private ssize_t recv(int sockfd, void *buf, size_t len, int flags) {
     sockaddr_in src_addr;
     src_addr.sin_family = AF_INET;
     src_addr.sin_port = 0;
     src_addr.sin_addr.s_addr = htonl(INADDR_ANY);
-    size_t addrlen = sockaddr_in.sizeof;
+    ssize_t addrlen = sockaddr_in.sizeof;
+    return recvfrom(sockfd, buf, len, flags, cast(sockaddr*)&src_addr, &addrlen);   
+}
+
+ssize_t readishSyscallBuffered(string name, size_t ident, ssize_t ERR, T...)(int fd, size_t buf, size_t len, T args){
     if (currentFiber is null) {
-        logf("RECV PASSTHROUGH FD=%d !", sockfd);
-        return cast(int)syscall(SYS_RECVFROM, sockfd,  cast(size_t) buf, len, flags,
-            cast(size_t) &src_addr, cast(size_t)&addrlen).withErrorno;
+        logf("%s PASSTHROUGH FD=%s", name, fd);
+        return cast(int)syscall(ident, fd, buf, len, args).withErrorno;
     }
     else {
-        logf("HOOKED RECV FD=%d", sockfd);
-        interceptFdNoFcntl(sockfd);
-        for(;;) {
-            ssize_t resp = syscall(SYS_RECVFROM, sockfd, cast(size_t) buf, len, MSG_DONTWAIT | flags,
-                cast(size_t) &src_addr, cast(size_t)&addrlen);
-            if (resp == -EWOULDBLOCK || resp == -EAGAIN) {
-                logf("RECV GOT DELAYED - sockfd %d, resp = %d", sockfd, resp);
-                reschedule(sockfd, currentFiber, EPOLLIN);
-                continue;
+        logf("HOOKED %s FD=%d", name, fd);
+        interceptFdNoFcntl(fd);
+        shared(DescriptorState)* descriptor = descriptors.ptr + fd;
+    L_start:
+        auto state = descriptor.readerState;
+        logf("%s syscall state is %d", name, state);
+        final switch (state) with (ReaderState) {
+        case EMPTY:
+            auto head = descriptor.readWaiters;
+            if (!descriptor.enqueueReader(head, cast(shared)currentFiber)) goto L_start;
+            // changed state to e.g. READY or UNCERTAIN in meantime, may need to reschedule
+            if (descriptor.readerState != EMPTY) descriptor.scheduleReaders();
+            FiberExt.yield();
+            goto L_start;
+        case UNCERTAIN:
+            descriptor.changeReader(UNCERTAIN, READING); // may became READY or READING
+            goto case READING;
+        case READY:
+            descriptor.changeReader(READY, READING); // always succeeds if 1 fiber reads
+            goto case READING;
+        case READING:
+            ssize_t resp = syscall(ident, fd, buf, len, args);
+            if (resp == len)
+                descriptor.changeReader(READING, UNCERTAIN);
+            else if(resp >= 0)
+                descriptor.changeReader(READING, EMPTY);
+            else if (resp == -ERR || resp == -EAGAIN) {
+                if (descriptor.changeReader(READING, EMPTY))
+                    goto case EMPTY;
+                goto L_start; // became UNCERTAIN or READY in meantime
             }
-            else
-                return withErrorno(resp);
+            return withErrorno(resp);
         }
         assert(0);
     }
 }
 
-extern(C) private ssize_t recvfrom(int sockfd, const void *buf, size_t len, int flags,
-                      const sockaddr *src_addr, ssize_t* addrlen)
-{
+ssize_t acceptSyscall(string name, size_t ident, ssize_t ERR, T...)(int fd, T args){
     if (currentFiber is null) {
-        logf("RECEIVEFROM PASSTHROUGH!");
-        return cast(int)syscall(SYS_RECVFROM, sockfd,  cast(size_t) buf, len, flags,
-                cast(size_t) src_addr, cast(size_t)addrlen).withErrorno;
+        logf("%s PASSTHROUGH FD=%s", name, fd);
+        return cast(int)syscall(ident, fd, args).withErrorno;
     }
     else {
-        logf("HOOKED RECEIVEFROM WITH MY LIB!"); // TODO: temporary for easy check, remove later
-        interceptFdNoFcntl(sockfd);
-        for(;;) {
-            ssize_t resp = syscall(SYS_RECVFROM, sockfd, cast(size_t) buf, len, MSG_DONTWAIT | flags,
-                cast(size_t) src_addr, cast(size_t)addrlen);
-            if (resp == -EWOULDBLOCK || resp == -EAGAIN) {
-                logf("RECEIVEFROM GOT DELAYED - sockfd %d, resp = %d", sockfd, resp);
-                reschedule(sockfd, currentFiber, EPOLLIN);
-                continue;
+        logf("HOOKED %s FD=%d", name, fd);
+        interceptFdNoFcntl(fd);
+        shared(DescriptorState)* descriptor = descriptors.ptr + fd;
+    L_start:
+        auto state = descriptor.readerState;
+        logf("%s syscall state is %d", name, state);
+        final switch (state) with (ReaderState) {
+        case EMPTY:
+            auto head = descriptor.readWaiters;
+            if (!descriptor.enqueueReader(head, cast(shared)currentFiber)) goto L_start;
+            // changed state to e.g. READY or UNCERTAIN in meantime, may need to reschedule
+            if (descriptor.readerState != EMPTY) descriptor.scheduleReaders();
+            FiberExt.yield();
+            goto L_start;
+        case UNCERTAIN:
+            descriptor.changeReader(UNCERTAIN, READING); // may became READY or READING
+            goto case READING;
+        case READY:
+            descriptor.changeReader(READY, READING); // always succeeds if 1 fiber reads
+            goto case READING;
+        case READING:
+            ssize_t resp = syscall(ident, fd, args);
+            if (resp >= 0) // for accept we never know if we emptied the queue
+                descriptor.changeReader(READING, UNCERTAIN);
+            else if (resp == -ERR || resp == -EAGAIN) {
+                if (descriptor.changeReader(READING, EMPTY))
+                    goto case EMPTY;
+                goto L_start; // became UNCERTAIN or READY in meantime
             }
-            else
-                return withErrorno(resp);
+            return withErrorno(resp);
         }
         assert(0);
     }
+}
+
+extern(C) private ssize_t recvfrom(int sockfd, void *buf, size_t len, int flags,
+                        sockaddr *src_addr, ssize_t* addrlen)
+{
+    return readishSyscallBuffered!("RECVFROM", SYS_RECVFROM, EWOULDBLOCK)(sockfd, 
+        cast(size_t)buf, len, flags, cast(size_t)src_addr, cast(size_t)addrlen);
 }
 
 extern(C) private ssize_t close(int fd)
@@ -504,7 +526,7 @@ extern(C) private ssize_t close(int fd)
 
 extern(C) private int poll(pollfd *fds, nfds_t nfds, int timeout)
 {
-    if (currentFiber is null) {
+    /*if (currentFiber is null) {
         logf("POLL PASSTHROUGH!");
         return cast(int)syscall(SYS_POLL, cast(size_t)fds, cast(size_t)nfds, timeout).withErrorno;
     }
@@ -529,7 +551,9 @@ extern(C) private int poll(pollfd *fds, nfds_t nfds, int timeout)
         }
 
         return sys_poll(fds, nfds, 0);
-    }
+    }*/
+    abort();
+    return 0;
 }
 
 void schedulerEntry(size_t n)
@@ -551,19 +575,7 @@ void schedulerEntry(size_t n)
             }
         }
         else {
-            if (processEvents() == 0) {
-                // TODO: wouldn't need to progressively sleep once we do edge-triggered eventloop
-                if (counter < 10) {
-                    counter += 1;
-                    Thread.yield();
-                }
-                else {
-                    Thread.sleep(1.msecs);
-                }
-            }
-            else {
-                counter = 0;
-            }
+            processEvents();
         }
     }
 }
@@ -587,96 +599,93 @@ shared DescriptorState[] descriptors;
 shared int event_loop_fd;
 shared int signal_loop_fd;
 
-struct AwaitingFiber {
-    FiberExt fiber;
-    int op; // EPOLLIN = reading & EPOLLOUT = writing
+enum ReaderState: uint {
+    EMPTY = 0,
+    UNCERTAIN = 1,
+    READING = 2,
+    READY = 3
+}
+
+enum WriterState: uint {
+    READY = 0,
+    UNCERTAIN = 1,
+    WRITING = 2,
+    EMPTY = 3
 }
 
 // list of awaiting fibers
-struct DescriptorState {
-    union
-    {
-        AwaitingFiber[] waiters;
-        AwaitingFiber single;
-    }
-    uint size;
-    bool intercepted = false;
-    bool isSocket = false;
+shared struct DescriptorState {
+    ReaderState _readerState;   
+    FiberExt _readerWaits;
+    WriterState _writerState;
+    FiberExt _writerWaits;
+    bool intercepted;
+    bool isSocket;
 
-    void removeFiber(FiberExt f)
-    {
-        if (size == 0) return;
-        else if (size == 1) size = 0;
-        else {
-            size_t j = 0;
-            for (size_t i = 0; i<waiters.length;) {
-                auto a = waiters[i];
-                if (a.fiber == f) {
-                    i++;
-                }
-                else {
-                    waiters[j] = waiters[i];
-                    j++;
-                    i++;
-                }
+    ReaderState readerState()() {
+        return atomicLoad(_readerState);
+    }
+
+    WriterState writerState()() {
+        return atomicLoad(_writerState);
+    }
+
+    // try to change state & return whatever it happend to be in the end
+    bool changeReader()(ReaderState from, ReaderState to) {
+        return cas(&_readerState, from, to);
+    }
+
+    // ditto for writer
+    bool changeWriter()(WriterState from, WriterState to) {
+        return cas(&_writerState, from, to);
+    }
+
+    //
+    shared(FiberExt) readWaiters()() {
+        return atomicLoad(_readerWaits);
+    }
+
+    //
+    shared(FiberExt) writeWaiters()(){
+        return atomicLoad(_writerWaits);
+    }
+
+    // try to enqueue reader fiber given old head
+    bool enqueueReader()(shared(FiberExt) head, shared(FiberExt) fiber) {
+        fiber.next = head;
+        return cas(&_readerWaits, head, fiber);
+    }
+
+    // try to enqueue writer fiber given old head
+    bool enqueueWriter()(shared(FiberExt) head, shared(FiberExt) fiber) {
+        fiber.next = head;
+        return cas(&_writerWaits, head, fiber);
+    }
+
+    // try to schedule readers - if fails - someone added a reader, it's now his job to check state
+    void scheduleReaders()() {
+        auto w = readWaiters;
+        if (w && cas(&_readerWaits, w, cast(shared)null)) {
+            auto wu = w.unshared;
+            while(wu.next) {
+                wu.schedule();
+                wu = wu.next;
             }
-            waiters = waiters[0..j];
-            size = cast(uint)j;
-            if (size == 1) {
-                single = waiters[0];
-                waiters = null;
-            }
-            else
-                waiters.assumeSafeAppend();
+            wu.schedule();
         }
     }
 
-    void blockFiber(FiberExt f, int op)
-    {
-        if (size == 0)
-            single = AwaitingFiber(currentFiber, op);
-        else if (size == 1)
-            waiters = [single, AwaitingFiber(currentFiber, op)];
-        else
-            waiters ~= AwaitingFiber(currentFiber, op);
-        size += 1;
-    }
-
-    uint unblockFibers(int event) {
-        if(size == 0) return 0;
-        uint unblocked;
-        if (size == 1) {
-            if ((single.op & event) != 0) {
-                single.fiber.schedule();
-                size = 0;
-                unblocked += 1;
+    // try to schedule writers, ditto
+    void scheduleWriters()() {
+        auto w = writeWaiters;
+        if (w && cas(&_writerWaits, w, cast(shared)null)) {
+            auto wu = w.unshared;
+            while(wu.next) {
+                wu.schedule();
+                wu = wu.next;
             }
+            wu.schedule();
         }
-        else {
-            size_t j = 0;
-            for (size_t i = 0; i<waiters.length;) {
-                auto a = waiters[i];
-                if ((a.op & event) != 0) {
-                    a.fiber.schedule();
-                    unblocked += 1;
-                    i++;
-                }
-                else {
-                    waiters[j] = waiters[i];
-                    j++;
-                    i++;
-                }
-            }
-            waiters = waiters[0..j];
-            size = cast(uint)j;
-            if (size == 1) {
-                single = waiters[0];
-                waiters = null;
-            }
-            else
-                waiters.assumeSafeAppend();
-        }
-        return unblocked;
     }
 }
 
@@ -689,7 +698,7 @@ void interceptFd(int fd) {
         int flags = fcntl(fd, F_GETFL, 0);
         fcntl(fd, F_SETFL, flags | O_NONBLOCK).checked;
         epoll_event event;
-        event.events = EPOLLIN | EPOLLOUT; // TODO: most events that make sense to watch for
+        event.events = EPOLLIN | EPOLLOUT | EPOLLET;
         event.data.fd = fd;
         if (epoll_ctl(event_loop_fd, EPOLL_CTL_ADD, fd, &event) < 0 && errno == EPERM) {
             logf("Detected real file FD, switching from epoll to aio");
@@ -710,10 +719,10 @@ void interceptFd(int fd) {
 void interceptFdNoFcntl(int fd) {
     logf("Hit interceptFdNoFcntl");
     if (fd < 0 || fd >= descriptors.length) return;
-    if (!descriptors[fd].intercepted) {
+    if (cas(&descriptors[fd].intercepted, false, true)) {
         logf("First use, registering fd = %d", fd);
         epoll_event event;
-        event.events = EPOLLIN | EPOLLOUT; // TODO: most events that make sense to watch for
+        event.events = EPOLLIN | EPOLLOUT | EPOLLET;
         event.data.fd = fd;
         if (epoll_ctl(event_loop_fd, EPOLL_CTL_ADD, fd, &event) < 0 && errno == EPERM) {
             logf("Detected real file FD, switching from epoll to aio");
@@ -723,30 +732,25 @@ void interceptFdNoFcntl(int fd) {
             logf("isSocket = true");
             descriptors[fd].isSocket = true;
         }
-        descriptors[fd].intercepted = true;
     }
 }
 
 void deregisterFd(int fd) {
-    if(fd >= 0 && fd < descriptors.length) descriptors[fd].intercepted = false;
-}
-
-// reschedule - put fiber in a wait list, and get back to scheduling loop
-void reschedule(int fd, FiberExt fiber, int op) {
-    mtx.lock();
-    descriptors[fd].unshared.blockFiber(currentFiber, op);
-    mtx.unlock();
-    FiberExt.yield();
+    if(fd >= 0 && fd < descriptors.length) {
+        auto descriptor = descriptors.ptr + fd;
+        descriptor._writerState = WriterState.READY;
+        descriptor._readerState = ReaderState.EMPTY;
+        descriptor.scheduleReaders();
+        descriptor.scheduleWriters();
+        descriptors[fd].intercepted = false;
+    }
 }
 
 void startloop()
 {
     import core.cpuid;
-    import core.cpuid;
     uint threads = threadsPerCPU;
-    mtx = cast(shared)new Mutex();
     event_loop_fd = cast(int)epoll_create1(0).checked("ERROR: Failed to create event-loop!");
-
     // use RT signals, disable default termination on signal received
     sigset_t mask;
     sigemptyset(&mask);
@@ -767,17 +771,14 @@ void startloop()
 
 size_t processEvents()
 {
-    epoll_event[MAX_EVENTS] events;
-    signalfd_siginfo[20] fdsi;
-    int r = epoll_wait(event_loop_fd, events.ptr, MAX_EVENTS, TIMEOUT)
-        .checked("ERROR: failed epoll_wait");
-    //logf("epoll_wait resp = %d", r);
-    //debug stderr.writefln("Passed epoll_wait, r = %d", r);
+    epoll_event[MAX_EVENTS] events = void;
+    signalfd_siginfo[20] fdsi = void;
+    int r = epoll_wait(event_loop_fd, events.ptr, MAX_EVENTS, TIMEOUT);
+    if (r < 0 && errno == EINTR) return 0;
+    else r.checked;
     size_t unblocked = 0;
     for (int n = 0; n < r; n++) {
         int fd = events[n].data.fd;
-        //logf("fd = %d, signalfd = %d", fd, signal_loop_fd);
-        mtx.lock();
         if (fd == signal_loop_fd) {
             logf("Intercepted our aio SIGNAL");
             ssize_t r2 = sys_read(signal_loop_fd, &fdsi, fdsi.sizeof);
@@ -789,19 +790,42 @@ size_t processEvents()
                 logf("Processing aio event idx = %d", i);
                 if (fdsi[i].ssi_signo == SIGNAL) {
                     logf("HIT our SIGNAL");
-                    //int fd2 = fdsi[i].ssi_int;
-                    //unblocked += descriptors[fd2].unshared.unblockFibers(events[n].events);
                     auto fiber = cast(FiberExt)cast(void*)fdsi[i].ssi_ptr;
                     fiber.schedule();
                     unblocked += 1;
                     logf("unblocked = %d", unblocked);
                 }
             }
-        } else {
-            unblocked += descriptors[fd].unshared.unblockFibers(events[n].events);
         }
-        mtx.unlock();
+        else {
+            logf("Event for fd=%d", fd);
+            auto descriptor = descriptors.ptr + fd;
+            if (events[n].events & EPOLLIN) {
+                auto state = descriptor.readerState;
+                logf("state = %d", state);
+                final switch(state) with(ReaderState) { 
+                    case EMPTY:
+                        descriptor.changeReader(EMPTY, READY);
+                        descriptor.scheduleReaders();
+                        break;
+                    case UNCERTAIN:
+                        descriptor.changeReader(UNCERTAIN, READY);
+                        break;
+                    case READING:
+                        if (!descriptor.changeReader(READING, UNCERTAIN)) {
+                            if (descriptor.changeReader(EMPTY, UNCERTAIN)) // if became empty - move to UNCERTAIN and wake readers
+                                descriptor.scheduleReaders();
+                        }
+                        break;
+                    case READY:
+                        break;
+                }
+                logf("Awaits %x", cast(void*)descriptor.readWaiters);
+            }
+            if (events[n].events & EPOLLOUT) {
+                //TODO: ...
+            }
+        }
     }
-
-    return unblocked;
+    return r;
 }
