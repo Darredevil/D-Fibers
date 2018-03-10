@@ -148,7 +148,10 @@ void server() {
 }
 
 void main() {
-    version(Windows) GC.disable(); // temporary for Win64 UMS threading
+    version(Windows) {
+        import core.memory;
+        GC.disable(); // temporary for Win64 UMS threading
+    }
     startloop();
     spawn(() => server());
     runFibers();

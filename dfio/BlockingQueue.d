@@ -100,32 +100,50 @@ unittest
     cons.join();
 }
 
-shared struct IntrusiveQueue(T) 
+shared struct IntrusiveQueue(T, Event) 
 if (is(T : Object)) {
+private:
     SpinLock lock = SpinLock(SpinLock.Contention.brief);
     T head;
     T tail;
+    bool exhausted = true; 
+public:
+    Event event;
+    
+    this(Event ev) {
+        event = ev;
+    }
 
-    void push(T item) nothrow {
+    void push(T item) {
         lock.lock();
         item.next = null;
-        scope(exit) lock.unlock();
-        if (tail is null) head = tail = cast(shared)item;
+        
+        if (tail is null) {
+            head = tail = cast(shared)item;
+            bool shouldTrigger = exhausted;
+            exhausted = false;
+            lock.unlock();
+            if (shouldTrigger) event.trigger();
+        }
         else {
             tail.next = cast(shared)item;
             tail = cast(shared)item;
+            lock.unlock();
         }
     }
 
     bool tryPop(ref T item) nothrow {
         lock.lock();
-        scope(exit) lock.unlock();
-        if (!head)
+        if (!head) {
+            exhausted = true;
+            lock.unlock();
             return false;
+        }
         else {
             item = head.unshared;
             head = head.next;
             if (head is null) tail = null;
+            lock.unlock();
             return true;
         }
     }
@@ -139,8 +157,12 @@ class Box(T) {
     }
 }
 
+struct EmptyEvent {
+    shared nothrow void trigger(){}
+}
+
 unittest {
-    shared q = IntrusiveQueue!(Box!int)();
+    shared q = IntrusiveQueue!(Box!int, EmptyEvent)();
     q.push(new Box!int(1));
     q.push(new Box!int(2));
     q.push(new Box!int(3));

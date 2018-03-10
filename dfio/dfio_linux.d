@@ -29,6 +29,32 @@ import core.sys.posix.aio;
 import core.sys.linux.sys.signalfd;
 import core.stdc.string : memset;
 
+extern(C) int eventfd(uint initial, int flags) nothrow;
+
+shared struct Event {
+nothrow:
+    this(int init) {
+        fd = eventfd(init, 0);
+    }
+
+    void reset() {
+        ubyte[8] bytes = void;
+        sys_read(fd, bytes.ptr, 8).checked("event reset");
+    }
+    
+    void trigger() { 
+        union U {
+            ulong cnt;
+            ubyte[8] bytes;
+        }
+        U value;
+        value.cnt = 1;
+        sys_write(fd, value.bytes.ptr, 8).checked("event trigger");
+    }
+    
+    int fd;
+}
+
 class FiberExt : Fiber { 
     FiberExt next;
     uint numScheduler;
@@ -56,9 +82,9 @@ FiberExt currentFiber; // this is TLS per user thread
 shared int alive; // count of non-terminated Fibers
 
 struct SchedulerBlock {
-    shared IntrusiveQueue!FiberExt queue;
+    shared IntrusiveQueue!(FiberExt, Event) queue;
     shared uint assigned;
-    size_t[3] padding;
+    size_t[2] padding;
 }
 
 static assert(SchedulerBlock.sizeof == 64);
@@ -66,7 +92,7 @@ static assert(SchedulerBlock.sizeof == 64);
 __gshared SchedulerBlock[] scheds;
 shared ObjectPool!TimerFD timerFdPool;
 
-enum int TIMEOUT = 1, MAX_EVENTS = 100;
+enum int MAX_EVENTS = 100;
 enum int SIGNAL = 42; // the range should be 32-64
 //enum int SIGNAL = SIGRTMIN + 1;
 
@@ -74,16 +100,16 @@ enum int MSG_DONTWAIT = 0x40;
 
 void logf(string file = __FILE__, int line = __LINE__, T...)(string msg, T args)
 {
-    debug stderr.writefln(msg, args);
-    debug stderr.writefln("\tat %s:%s:[LWP:%s]", file, line, pthread_self());
+    version(none) debug stderr.writefln(msg, args);
+    version(none) debug stderr.writefln("\tat %s:%s:[LWP:%s]", file, line, pthread_self());
 }
 
-ssize_t sys_read(int fd, void *buf, size_t count) {
+ssize_t sys_read(int fd, void *buf, size_t count) nothrow {
     logf("Old school read");
     return syscall(SYS_READ, fd, cast(ssize_t) buf, cast(ssize_t) count).withErrorno;
 }
 
-ssize_t sys_write(int fd, const void *buf, size_t count)
+ssize_t sys_write(int fd, const void *buf, size_t count) nothrow
 {
     logf("Old school write");
     return syscall(SYS_WRITE, fd, cast(size_t) buf, count).withErrorno;
@@ -95,7 +121,7 @@ int sys_poll(pollfd *fds, nfds_t nfds, int timeout)
     return cast(int)    syscall(SYS_POLL, cast(size_t)fds, cast(size_t) nfds, timeout).withErrorno;
 }
 
-int checked(int value, const char* msg="unknown place") {
+int checked(int value, const char* msg="unknown place") nothrow {
     if (value < 0) {
         perror(msg);
         _exit(value);
@@ -103,7 +129,7 @@ int checked(int value, const char* msg="unknown place") {
     return value;
 }
 
-ssize_t withErrorno(ssize_t resp){
+ssize_t withErrorno(ssize_t resp) nothrow {
     if(resp < 0) {
         //logf("Syscall ret %d", resp);
         errno = cast(int)-resp;
@@ -114,7 +140,7 @@ ssize_t withErrorno(ssize_t resp){
     }
 }
 
-ssize_t checked(ssize_t value, const char* msg="unknown place") {
+ssize_t checked(ssize_t value, const char* msg="unknown place") nothrow {
     if (value < 0) {
         perror(msg);
         abort();
@@ -187,7 +213,7 @@ version (X86) {
         SYS_SENDTO = 0x2c,
         SYS_RECVFROM = 45;
 
-    size_t syscall(size_t ident, size_t n)
+    size_t syscall(size_t ident, size_t n) nothrow
     {
         size_t ret;
 
@@ -201,7 +227,7 @@ version (X86) {
         return ret;
     }
 
-    size_t syscall(size_t ident, size_t n, size_t arg1, size_t arg2)
+    size_t syscall(size_t ident, size_t n, size_t arg1, size_t arg2) nothrow
     {
         size_t ret;
 
@@ -217,7 +243,7 @@ version (X86) {
         return ret;
     }
 
-    size_t syscall(size_t ident, size_t n, size_t arg1, size_t arg2, size_t arg3)
+    size_t syscall(size_t ident, size_t n, size_t arg1, size_t arg2, size_t arg3) nothrow
     {
         size_t ret;
 
@@ -234,7 +260,7 @@ version (X86) {
         return ret;
     }
 
-    size_t syscall(size_t ident, size_t n, size_t arg1, size_t arg2, size_t arg3, size_t arg4)
+    size_t syscall(size_t ident, size_t n, size_t arg1, size_t arg2, size_t arg3, size_t arg4) nothrow
     {
         size_t ret;
 
@@ -252,7 +278,7 @@ version (X86) {
         return ret;
     }
 
-    size_t syscall(size_t ident, size_t n, size_t arg1, size_t arg2, size_t arg3, size_t arg4, size_t arg5)
+    size_t syscall(size_t ident, size_t n, size_t arg1, size_t arg2, size_t arg3, size_t arg4, size_t arg5) nothrow
     {
         size_t ret;
 
@@ -272,7 +298,7 @@ version (X86) {
     }
 }
 
-extern(C) private ssize_t read(int fd, void *buf, size_t count)
+extern(C) private ssize_t read(int fd, void *buf, size_t count) nothrow
 {
 //    if (currentFiber is null) {
         logf("READ PASSTHROUGH!");
@@ -558,24 +584,36 @@ extern(C) private int poll(pollfd *fds, nfds_t nfds, int timeout)
 
 void schedulerEntry(size_t n)
 {
-    int counter = 0;
+    import std.datetime.stopwatch;
+    //int counter = 0;
+    //StopWatch sw;
+    SchedulerBlock* sched = scheds.ptr + n;
+    pollfd[2] fds = void;
+    fds[0].fd = sched.queue.event.fd;
+    fds[0].events = POLLIN;
+    fds[1].fd = event_loop_fd;
+    fds[1].events = POLLIN;
     while (alive > 0) {
-        if (scheds[n].queue.tryPop(currentFiber)) {
-            logf("Fiber %x started", cast(void*)currentFiber);
-            try {
-                currentFiber.call();
+        int ready = sys_poll(fds.ptr, 2, -1);
+        if (ready > 0) {
+            if (fds[0].revents & POLLIN) {
+                sched.queue.event.reset();
+                while(sched.queue.tryPop(currentFiber)) {
+                    logf("Fiber %x started", cast(void*)currentFiber);
+                    try {
+                        currentFiber.call();
+                    }
+                    catch (Exception e) {
+                        stderr.writeln(e);
+                        atomicOp!"-="(alive, 1);
+                    }
+                    if (currentFiber.state == FiberExt.State.TERM) {
+                        logf("Fiber %s terminated", cast(void*)currentFiber);
+                        atomicOp!"-="(alive, 1);
+                    }
+                }
             }
-            catch (Exception e) {
-                stderr.writeln(e);
-                atomicOp!"-="(alive, 1);
-            }
-            if (currentFiber.state == FiberExt.State.TERM) {
-                logf("Fiber %s terminated", cast(void*)currentFiber);
-                atomicOp!"-="(alive, 1);
-            }
-        }
-        else {
-            processEvents();
+            else if (fds[1].revents & POLLIN) processEvents();
         }
     }
 }
@@ -767,16 +805,18 @@ void startloop()
     descriptors = (cast(shared(DescriptorState*)) mmap(null, fdMax * DescriptorState.sizeof, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0))[0..fdMax];
     timerFdPool = new shared ObjectPool!TimerFD;
     scheds = new SchedulerBlock[threads];
+    foreach(ref sched; scheds) {
+        sched.queue = IntrusiveQueue!(FiberExt, Event)(Event(0));
+    }
 }
 
 size_t processEvents()
 {
     epoll_event[MAX_EVENTS] events = void;
     signalfd_siginfo[20] fdsi = void;
-    int r = epoll_wait(event_loop_fd, events.ptr, MAX_EVENTS, TIMEOUT);
-    if (r < 0 && errno == EINTR) return 0;
+    int r = epoll_wait(event_loop_fd, events.ptr, MAX_EVENTS, 0);
+    if (r < 0 && errno == EINTR) return -1;
     else r.checked;
-    size_t unblocked = 0;
     for (int n = 0; n < r; n++) {
         int fd = events[n].data.fd;
         if (fd == signal_loop_fd) {
@@ -792,8 +832,6 @@ size_t processEvents()
                     logf("HIT our SIGNAL");
                     auto fiber = cast(FiberExt)cast(void*)fdsi[i].ssi_ptr;
                     fiber.schedule();
-                    unblocked += 1;
-                    logf("unblocked = %d", unblocked);
                 }
             }
         }
