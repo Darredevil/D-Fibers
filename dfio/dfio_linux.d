@@ -584,9 +584,7 @@ extern(C) private int poll(pollfd *fds, nfds_t nfds, int timeout)
 
 void schedulerEntry(size_t n)
 {
-    import std.datetime.stopwatch;
-    //int counter = 0;
-    //StopWatch sw;
+    writefln("%d pid = %d", n, gettid());
     SchedulerBlock* sched = scheds.ptr + n;
     pollfd[2] fds = void;
     fds[0].fd = sched.queue.event.fd;
