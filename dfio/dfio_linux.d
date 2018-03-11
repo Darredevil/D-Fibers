@@ -206,12 +206,26 @@ version (X86) {
         SYS_WRITE = 0x1,
         SYS_CLOSE = 3,
         SYS_POLL = 7,
+        SYS_GETTID = 186,
         SYS_SOCKETPAIR = 0x35,
         SYS_ACCEPT = 0x2b,
         SYS_ACCEPT4 = 0x120,
         SYS_CONNECT = 0x2a,
         SYS_SENDTO = 0x2c,
         SYS_RECVFROM = 45;
+
+    size_t syscall(size_t ident) nothrow
+    {
+        size_t ret;
+
+        asm
+        {
+            mov RAX, ident;
+            syscall;
+            mov ret, RAX;
+        }
+        return ret;
+    }
 
     size_t syscall(size_t ident, size_t n) nothrow
     {
@@ -582,9 +596,14 @@ extern(C) private int poll(pollfd *fds, nfds_t nfds, int timeout)
     return 0;
 }
 
+int gettid()
+{
+    return cast(int)syscall(SYS_GETTID);
+}
+
 void schedulerEntry(size_t n)
 {
-    writefln("%d pid = %d", n, gettid());
+    writefln("Scheduler %d pid = %d", n, gettid());
     SchedulerBlock* sched = scheds.ptr + n;
     pollfd[2] fds = void;
     fds[0].fd = sched.queue.event.fd;
