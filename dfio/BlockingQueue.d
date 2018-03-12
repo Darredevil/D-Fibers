@@ -115,9 +115,8 @@ public:
     }
 
     void push(T item) {
-        lock.lock();
         item.next = null;
-        
+        lock.lock();
         if (tail is null) {
             head = tail = cast(shared)item;
             bool shouldTrigger = exhausted;

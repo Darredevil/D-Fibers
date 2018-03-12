@@ -27,6 +27,7 @@ import core.sys.posix.sys.mman;
 import core.sys.posix.pthread;
 import core.sys.posix.aio;
 import core.sys.linux.sys.signalfd;
+import core.sys.linux.sched;
 import core.stdc.string : memset;
 
 extern(C) int eventfd(uint initial, int flags) nothrow;
@@ -516,7 +517,7 @@ ssize_t acceptSyscall(string name, size_t ident, ssize_t ERR, T...)(int fd, T ar
     }
     else {
         logf("HOOKED %s FD=%d", name, fd);
-        interceptFdNoFcntl(fd);
+        interceptFd(fd);
         shared(DescriptorState)* descriptor = descriptors.ptr + fd;
     L_start:
         auto state = descriptor.readerState;
@@ -603,17 +604,27 @@ int gettid()
 
 void schedulerEntry(size_t n)
 {
-    writefln("Scheduler %d pid = %d", n, gettid());
+    int tid = gettid();
+    cpu_set_t mask;
+    CPU_SET(n, &mask);
+    sched_setaffinity(tid, mask.sizeof, &mask).checked("sched_setaffinity");
     SchedulerBlock* sched = scheds.ptr + n;
-    pollfd[2] fds = void;
-    fds[0].fd = sched.queue.event.fd;
-    fds[0].events = POLLIN;
-    fds[1].fd = event_loop_fd;
-    fds[1].events = POLLIN;
+    int sched_epoll = epoll_create1(0).checked;
+    epoll_event[2] events;
+    events[0].data.fd = sched.queue.event.fd;
+    events[0].events = POLLIN;
+    events[1].data.fd = event_loop_fd;
+    events[1].events = POLLIN;
+    epoll_ctl(sched_epoll, EPOLL_CTL_ADD, sched.queue.event.fd, &events[0]).checked;
+    epoll_ctl(sched_epoll, EPOLL_CTL_ADD, event_loop_fd, &events[1]).checked;
+    int counter = 0, counter2 = 0;
+    int ready = 0;
     while (alive > 0) {
-        int ready = sys_poll(fds.ptr, 2, -1);
-        if (ready > 0) {
-            if (fds[0].revents & POLLIN) {
+        do {
+            ready = epoll_wait(sched_epoll, events.ptr, events.length, -1);
+        } while (ready < 0 && errno == EINTR);
+        for (int i = 0; i < ready; i++) {
+            if (events[i].data.fd != event_loop_fd) {
                 sched.queue.event.reset();
                 while(sched.queue.tryPop(currentFiber)) {
                     logf("Fiber %x started", cast(void*)currentFiber);
@@ -630,7 +641,9 @@ void schedulerEntry(size_t n)
                     }
                 }
             }
-            else if (fds[1].revents & POLLIN) processEvents();
+            else {
+                processEvents();
+            }
         }
     }
 }
@@ -645,9 +658,9 @@ void spawn(void delegate() func) {
     if (loadA < loadB) choice = a;
     else choice = b;
     atomicOp!"+="(scheds[choice].assigned, 1);
+    atomicOp!"+="(alive, 1);
     auto f = new FiberExt(func, choice);
     f.schedule();
-    atomicOp!"+="(alive, 1);
 }
 
 shared DescriptorState[] descriptors;
@@ -831,9 +844,11 @@ size_t processEvents()
 {
     epoll_event[MAX_EVENTS] events = void;
     signalfd_siginfo[20] fdsi = void;
-    int r = epoll_wait(event_loop_fd, events.ptr, MAX_EVENTS, 0);
-    if (r < 0 && errno == EINTR) return -1;
-    else r.checked;
+    int r;
+    do {
+        r = epoll_wait(event_loop_fd, events.ptr, MAX_EVENTS, 0);
+    } while (r < 0 && errno == EINTR);
+    checked(r);
     for (int n = 0; n < r; n++) {
         int fd = events[n].data.fd;
         if (fd == signal_loop_fd) {
