@@ -50,7 +50,7 @@ simple-bench-ldc: abc hello-dlang
 
 simple-bench-go: abc hello-golang
 	rm -f *.csv
-	(GOMAXPROCS=1 ./hello-golang &) && (./abc hello-golang '[0-1k:100kA+10x3]' localhost:8080/) && (pkill hello-golang)
+	(./hello-golang &) && (./abc hello-golang '[0-1k:100kA+10x3]' localhost:8080/) && (pkill hello-golang)
 	cp *.csv results/go.csv
 	cd results && ./extract_plot_data.sh go.csv && gnuplot -c plot_bench.plt "Golang Benchmark" "go_bench.png" "go.csv.dat"
 
