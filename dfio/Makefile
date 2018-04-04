@@ -20,6 +20,9 @@ simple-bench-ldc: libdfio.so http-parser
 simple-bench-go:
 	$(MAKE) -C bench simple-bench-go
 
+simple-bench-fast-go:
+	$(MAKE) -C bench simple-bench-fast-go
+
 simple-bench-js:
 	$(MAKE) -C bench simple-bench-js
 
