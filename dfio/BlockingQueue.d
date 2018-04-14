@@ -146,6 +146,16 @@ public:
             return true;
         }
     }
+
+    // drain the whole queue in one go
+    T drain() nothrow {
+        lock.lock();
+        exhausted = true;
+        auto r = head.unshared;
+        head = tail = null;
+        lock.unlock();
+        return r;
+    }
 }
 
 class Box(T) {

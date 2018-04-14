@@ -27,7 +27,6 @@ import core.sys.posix.sys.mman;
 import core.sys.posix.pthread;
 import core.sys.linux.sys.signalfd;
 import core.sys.linux.sched;
-import core.stdc.string : memset;
 
 extern(C) int eventfd(uint initial, int flags) nothrow;
 
@@ -71,7 +70,7 @@ class FiberExt : Fiber {
         numScheduler = numSched;
     }
 
-    void schedule()
+    void schedule() nothrow
     {
         scheds[numScheduler].queue.push(this);
     }
@@ -457,7 +456,7 @@ extern(C) private ssize_t sendto(int sockfd, const void *buf, size_t len, int fl
     }*/
 }
 
-extern(C) private ssize_t recv(int sockfd, void *buf, size_t len, int flags) {
+extern(C) private ssize_t recv(int sockfd, void *buf, size_t len, int flags) nothrow {
     sockaddr_in src_addr;
     src_addr.sin_family = AF_INET;
     src_addr.sin_port = 0;
@@ -466,7 +465,7 @@ extern(C) private ssize_t recv(int sockfd, void *buf, size_t len, int flags) {
     return recvfrom(sockfd, buf, len, flags, cast(sockaddr*)&src_addr, &addrlen);   
 }
 
-ssize_t readishSyscallBuffered(string name, size_t ident, ssize_t ERR, T...)(int fd, size_t buf, size_t len, T args){
+ssize_t readishSyscallBuffered(string name, size_t ident, ssize_t ERR, T...)(int fd, size_t buf, size_t len, T args) nothrow {
     if (currentFiber is null) {
         logf("%s PASSTHROUGH FD=%s", name, fd);
         return cast(int)syscall(ident, fd, buf, len, args).withErrorno;
@@ -551,13 +550,13 @@ ssize_t acceptSyscall(string name, size_t ident, ssize_t ERR, T...)(int fd, T ar
 }
 
 extern(C) private ssize_t recvfrom(int sockfd, void *buf, size_t len, int flags,
-                        sockaddr *src_addr, ssize_t* addrlen)
+                        sockaddr *src_addr, ssize_t* addrlen) nothrow
 {
     return readishSyscallBuffered!("RECVFROM", SYS_RECVFROM, EWOULDBLOCK)(sockfd, 
         cast(size_t)buf, len, flags, cast(size_t)src_addr, cast(size_t)addrlen);
 }
 
-extern(C) private ssize_t close(int fd)
+extern(C) private ssize_t close(int fd) nothrow
 {
     logf("HOOKED CLOSE!");
     deregisterFd(fd);
@@ -625,19 +624,23 @@ void schedulerEntry(size_t n)
         for (int i = 0; i < ready; i++) {
             if (events[i].data.fd != event_loop_fd) {
                 sched.queue.event.reset();
-                while(sched.queue.tryPop(currentFiber)) {
-                    logf("Fiber %x started", cast(void*)currentFiber);
+                auto f = sched.queue.drain();
+                while(f) {
+                    auto next = f.next; //save next, it will be reused on scheduling
+                    currentFiber = f;
+                    logf("Fiber %x started", cast(void*)f);
                     try {
-                        currentFiber.call();
+                        f.call();
                     }
                     catch (Exception e) {
                         stderr.writeln(e);
                         atomicOp!"-="(alive, 1);
                     }
-                    if (currentFiber.state == FiberExt.State.TERM) {
-                        logf("Fiber %s terminated", cast(void*)currentFiber);
+                    if (f.state == FiberExt.State.TERM) {
+                        logf("Fiber %s terminated", cast(void*)f);
                         atomicOp!"-="(alive, 1);
                     }
+                    f = next;
                 }
             }
             else {
@@ -688,7 +691,7 @@ shared struct DescriptorState {
     FiberExt _writerWaits;
     bool intercepted;
     bool isSocket;
-
+nothrow:
     ReaderState readerState()() {
         return atomicLoad(_readerState);
     }
@@ -757,7 +760,7 @@ shared struct DescriptorState {
 }
 
 // intercept - a filter for file descriptor, changes flags and register on first use
-void interceptFd(int fd) {
+void interceptFd(int fd) nothrow {
     logf("Hit interceptFD");
     if (fd < 0 || fd >= descriptors.length) return;
     if (!descriptors[fd].intercepted) {
@@ -783,7 +786,7 @@ void interceptFd(int fd) {
     }
 }
 
-void interceptFdNoFcntl(int fd) {
+void interceptFdNoFcntl(int fd) nothrow {
     logf("Hit interceptFdNoFcntl");
     if (fd < 0 || fd >= descriptors.length) return;
     if (cas(&descriptors[fd].intercepted, false, true)) {
@@ -802,14 +805,14 @@ void interceptFdNoFcntl(int fd) {
     }
 }
 
-void deregisterFd(int fd) {
+void deregisterFd(int fd) nothrow {
     if(fd >= 0 && fd < descriptors.length) {
         auto descriptor = descriptors.ptr + fd;
-        descriptor._writerState = WriterState.READY;
-        descriptor._readerState = ReaderState.EMPTY;
+        atomicStore(descriptor._writerState, WriterState.READY);
+        atomicStore(descriptor._readerState, ReaderState.EMPTY);
         descriptor.scheduleReaders();
         descriptor.scheduleWriters();
-        descriptors[fd].intercepted = false;
+        atomicStore(descriptor.intercepted, false);
     }
 }
 
