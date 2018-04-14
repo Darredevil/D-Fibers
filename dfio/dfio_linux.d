@@ -600,6 +600,8 @@ int gettid()
     return cast(int)syscall(SYS_GETTID);
 }
 
+shared int event_loop_spin;
+
 void schedulerEntry(size_t n)
 {
     int tid = gettid();
@@ -644,7 +646,10 @@ void schedulerEntry(size_t n)
                 }
             }
             else {
-                processEvents();
+                if (cas(&event_loop_spin, 0, 1)) {
+                    processEvents();
+                    atomicStore(event_loop_spin, 0);
+                }
             }
         }
     }
