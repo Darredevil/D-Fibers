@@ -609,48 +609,27 @@ void schedulerEntry(size_t n)
     CPU_SET(n, &mask);
     sched_setaffinity(tid, mask.sizeof, &mask).checked("sched_setaffinity");
     SchedulerBlock* sched = scheds.ptr + n;
-    int sched_epoll = epoll_create1(0).checked;
-    epoll_event[2] events;
-    events[0].data.fd = sched.queue.event.fd;
-    events[0].events = POLLIN;
-    events[1].data.fd = event_loop_fd;
-    events[1].events = POLLIN;
-    epoll_ctl(sched_epoll, EPOLL_CTL_ADD, sched.queue.event.fd, &events[0]).checked;
-    epoll_ctl(sched_epoll, EPOLL_CTL_ADD, event_loop_fd, &events[1]).checked;
     int counter = 0, counter2 = 0;
     int ready = 0;
     while (alive > 0) {
-        do {
-            ready = epoll_wait(sched_epoll, events.ptr, events.length, -1);
-        } while (ready < 0 && errno == EINTR);
-        for (int i = 0; i < ready; i++) {
-            if (events[i].data.fd != event_loop_fd) {
-                sched.queue.event.reset();
-                FiberExt f = sched.queue.drain();
-                while(f !is null || (f = sched.queue.drain()) !is null) {
-                    auto next = f.next; //save next, it will be reused on scheduling
-                    currentFiber = f;
-                    logf("Fiber %x started", cast(void*)f);
-                    try {
-                        f.call();
-                    }
-                    catch (Exception e) {
-                        stderr.writeln(e);
-                        atomicOp!"-="(alive, 1);
-                    }
-                    if (f.state == FiberExt.State.TERM) {
-                        logf("Fiber %s terminated", cast(void*)f);
-                        atomicOp!"-="(alive, 1);
-                    }
-                    f = next;
-                }
+        sched.queue.event.reset();
+        FiberExt f = sched.queue.drain();
+        while(f !is null || (f = sched.queue.drain()) !is null) {
+            auto next = f.next; //save next, it will be reused on scheduling
+            currentFiber = f;
+            logf("Fiber %x started", cast(void*)f);
+            try {
+                f.call();
             }
-            else {
-                if (cas(&event_loop_spin, 0, 1)) {
-                    processEvents();
-                    atomicStore(event_loop_spin, 0);
-                }
+            catch (Exception e) {
+                stderr.writeln(e);
+                atomicOp!"-="(alive, 1);
             }
+            if (f.state == FiberExt.State.TERM) {
+                logf("Fiber %s terminated", cast(void*)f);
+                atomicOp!"-="(alive, 1);
+            }
+            f = next;
         }
     }
 }
@@ -845,64 +824,66 @@ void startloop()
     foreach(ref sched; scheds) {
         sched.queue = IntrusiveQueue!(FiberExt, Event)(Event(0));
     }
+    new Thread(&processEvents).start();
 }
 
-size_t processEvents()
+void processEvents()
 {
-    epoll_event[MAX_EVENTS] events = void;
-    signalfd_siginfo[20] fdsi = void;
-    int r;
-    do {
-        r = epoll_wait(event_loop_fd, events.ptr, MAX_EVENTS, 0);
-    } while (r < 0 && errno == EINTR);
-    checked(r);
-    for (int n = 0; n < r; n++) {
-        int fd = events[n].data.fd;
-        if (fd == signal_loop_fd) {
-            logf("Intercepted our aio SIGNAL");
-            ssize_t r2 = sys_read(signal_loop_fd, &fdsi, fdsi.sizeof);
-            logf("aio events = %d", r2 / signalfd_siginfo.sizeof);
-            if (r2 % signalfd_siginfo.sizeof != 0)
-                checked(r2, "ERROR: failed read on signalfd");
+    for (;;) {
+        epoll_event[MAX_EVENTS] events = void;
+        signalfd_siginfo[20] fdsi = void;
+        int r;
+        do {
+            r = epoll_wait(event_loop_fd, events.ptr, MAX_EVENTS, -1);
+        } while (r < 0 && errno == EINTR);
+        checked(r);
+        for (int n = 0; n < r; n++) {
+            int fd = events[n].data.fd;
+            if (fd == signal_loop_fd) {
+                logf("Intercepted our aio SIGNAL");
+                ssize_t r2 = sys_read(signal_loop_fd, &fdsi, fdsi.sizeof);
+                logf("aio events = %d", r2 / signalfd_siginfo.sizeof);
+                if (r2 % signalfd_siginfo.sizeof != 0)
+                    checked(r2, "ERROR: failed read on signalfd");
 
-            for(int i = 0; i < r2 / signalfd_siginfo.sizeof; i++) { //TODO: stress test multiple signals
-                logf("Processing aio event idx = %d", i);
-                if (fdsi[i].ssi_signo == SIGNAL) {
-                    logf("HIT our SIGNAL");
-                    auto fiber = cast(FiberExt)cast(void*)fdsi[i].ssi_ptr;
-                    fiber.schedule();
+                for(int i = 0; i < r2 / signalfd_siginfo.sizeof; i++) { //TODO: stress test multiple signals
+                    logf("Processing aio event idx = %d", i);
+                    if (fdsi[i].ssi_signo == SIGNAL) {
+                        logf("HIT our SIGNAL");
+                        auto fiber = cast(FiberExt)cast(void*)fdsi[i].ssi_ptr;
+                        fiber.schedule();
+                    }
                 }
             }
-        }
-        else {
-            logf("Event for fd=%d", fd);
-            auto descriptor = descriptors.ptr + fd;
-            if (events[n].events & EPOLLIN) {
-                auto state = descriptor.readerState;
-                logf("state = %d", state);
-                final switch(state) with(ReaderState) { 
-                    case EMPTY:
-                        descriptor.changeReader(EMPTY, READY);
-                        descriptor.scheduleReaders();
-                        break;
-                    case UNCERTAIN:
-                        descriptor.changeReader(UNCERTAIN, READY);
-                        break;
-                    case READING:
-                        if (!descriptor.changeReader(READING, UNCERTAIN)) {
-                            if (descriptor.changeReader(EMPTY, UNCERTAIN)) // if became empty - move to UNCERTAIN and wake readers
-                                descriptor.scheduleReaders();
-                        }
-                        break;
-                    case READY:
-                        break;
+            else {
+                logf("Event for fd=%d", fd);
+                auto descriptor = descriptors.ptr + fd;
+                if (events[n].events & EPOLLIN) {
+                    auto state = descriptor.readerState;
+                    logf("state = %d", state);
+                    final switch(state) with(ReaderState) { 
+                        case EMPTY:
+                            descriptor.changeReader(EMPTY, READY);
+                            descriptor.scheduleReaders();
+                            break;
+                        case UNCERTAIN:
+                            descriptor.changeReader(UNCERTAIN, READY);
+                            break;
+                        case READING:
+                            if (!descriptor.changeReader(READING, UNCERTAIN)) {
+                                if (descriptor.changeReader(EMPTY, UNCERTAIN)) // if became empty - move to UNCERTAIN and wake readers
+                                    descriptor.scheduleReaders();
+                            }
+                            break;
+                        case READY:
+                            break;
+                    }
+                    logf("Awaits %x", cast(void*)descriptor.readWaiters);
                 }
-                logf("Awaits %x", cast(void*)descriptor.readWaiters);
-            }
-            if (events[n].events & EPOLLOUT) {
-                //TODO: ...
+                if (events[n].events & EPOLLOUT) {
+                    //TODO: ...
+                }
             }
         }
     }
-    return r;
 }
