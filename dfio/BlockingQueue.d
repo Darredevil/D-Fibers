@@ -150,11 +150,17 @@ public:
     // drain the whole queue in one go
     T drain() nothrow {
         lock.lock();
-        exhausted = true;
-        auto r = head.unshared;
-        head = tail = null;
-        lock.unlock();
-        return r;
+        if (head is null) {
+            exhausted = true;
+            lock.unlock();
+            return null;
+        }
+        else {
+            auto r = head.unshared;
+            head = tail = null;
+            lock.unlock();
+            return r;
+        }
     }
 }
 

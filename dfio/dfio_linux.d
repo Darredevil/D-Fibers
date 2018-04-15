@@ -626,8 +626,8 @@ void schedulerEntry(size_t n)
         for (int i = 0; i < ready; i++) {
             if (events[i].data.fd != event_loop_fd) {
                 sched.queue.event.reset();
-                auto f = sched.queue.drain();
-                while(f) {
+                FiberExt f = sched.queue.drain();
+                while(f !is null || (f = sched.queue.drain()) !is null) {
                     auto next = f.next; //save next, it will be reused on scheduling
                     currentFiber = f;
                     logf("Fiber %x started", cast(void*)f);
