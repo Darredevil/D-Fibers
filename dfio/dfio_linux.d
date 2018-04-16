@@ -646,7 +646,8 @@ void schedulerEntry(size_t n)
 void spawn(void delegate() func) {
     import std.random;
     uint a = uniform!"[)"(0, cast(uint)scheds.length);
-    uint b = uniform!"[)"(0, cast(uint)scheds.length);
+    uint b = uniform!"[)"(0, cast(uint)scheds.length-1);
+    if (a == b) b = cast(uint)scheds.length-1;
     uint loadA = scheds[a].assigned;
     uint loadB = scheds[b].assigned;
     uint choice;
@@ -796,7 +797,6 @@ void deregisterFd(int fd) nothrow {
 
 extern(C) void graceful_shutdown_on_signal(int, siginfo_t*, void*)
 {
-    termination.trigger();
     version(photon_tracing) printStats();
     _exit(9);
 }
