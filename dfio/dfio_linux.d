@@ -36,9 +36,13 @@ nothrow:
         fd = eventfd(init, 0);
     }
 
-    void reset() {
+    void waitAndReset() {
         ubyte[8] bytes = void;
-        sys_read(fd, bytes.ptr, 8).checked("event reset");
+        ssize_t r;
+        do {
+            r = sys_read(fd, bytes.ptr, 8);
+        } while(r < 0 && errno == EINTR);
+        r.checked("event reset");
     }
     
     void trigger() { 
@@ -48,7 +52,11 @@ nothrow:
         }
         U value;
         value.cnt = 1;
-        sys_write(fd, value.bytes.ptr, 8).checked("event trigger");
+        ssize_t r;
+        do {
+            r = sys_write(fd, value.bytes.ptr, 8);
+        } while(r < 0 && errno == EINTR);
+        r.checked("event trigger");
     }
     
     int fd;
@@ -77,7 +85,8 @@ class FiberExt : Fiber {
 }
 
 FiberExt currentFiber; // this is TLS per user thread
-
+shared Event termination; // termination event, triggered once last fiber exits
+shared pthread_t eventLoop; // event loop, runs outside of D runtime
 shared int alive; // count of non-terminated Fibers
 
 struct SchedulerBlock {
@@ -88,10 +97,10 @@ struct SchedulerBlock {
 
 static assert(SchedulerBlock.sizeof == 64);
 
-__gshared SchedulerBlock[] scheds;
+shared SchedulerBlock[] scheds;
 shared ObjectPool!TimerFD timerFdPool;
 
-enum int MAX_EVENTS = 100;
+enum int MAX_EVENTS = 500;
 enum int SIGNAL = 42; // the range should be 32-64
 //enum int SIGNAL = SIGRTMIN + 1;
 
@@ -472,8 +481,8 @@ ssize_t readishSyscallBuffered(string name, size_t ident, ssize_t ERR, T...)(int
     }
     else {
         logf("HOOKED %s FD=%d", name, fd);
-        interceptFdNoFcntl(fd);
-        shared(DescriptorState)* descriptor = descriptors.ptr + fd;
+        interceptFd!(Fcntl.no)(fd);
+        shared(Descriptor)* descriptor = descriptors.ptr + fd;
     L_start:
         auto state = descriptor.readerState;
         logf("%s syscall state is %d", name, state);
@@ -515,8 +524,8 @@ ssize_t acceptSyscall(string name, size_t ident, ssize_t ERR, T...)(int fd, T ar
     }
     else {
         logf("HOOKED %s FD=%d", name, fd);
-        interceptFd(fd);
-        shared(DescriptorState)* descriptor = descriptors.ptr + fd;
+        interceptFd!(Fcntl.yes)(fd);
+        shared(Descriptor)* descriptor = descriptors.ptr + fd;
     L_start:
         auto state = descriptor.readerState;
         logf("%s syscall state is %d", name, state);
@@ -600,38 +609,38 @@ int gettid()
     return cast(int)syscall(SYS_GETTID);
 }
 
-shared int event_loop_spin;
-
 void schedulerEntry(size_t n)
 {
     int tid = gettid();
     cpu_set_t mask;
     CPU_SET(n, &mask);
     sched_setaffinity(tid, mask.sizeof, &mask).checked("sched_setaffinity");
-    SchedulerBlock* sched = scheds.ptr + n;
-    int counter = 0, counter2 = 0;
-    int ready = 0;
+    shared SchedulerBlock* sched = scheds.ptr + n;
     while (alive > 0) {
-        sched.queue.event.reset();
-        FiberExt f = sched.queue.drain();
-        while(f !is null || (f = sched.queue.drain()) !is null) {
-            auto next = f.next; //save next, it will be reused on scheduling
-            currentFiber = f;
-            logf("Fiber %x started", cast(void*)f);
-            try {
-                f.call();
-            }
-            catch (Exception e) {
-                stderr.writeln(e);
-                atomicOp!"-="(alive, 1);
-            }
-            if (f.state == FiberExt.State.TERM) {
-                logf("Fiber %s terminated", cast(void*)f);
-                atomicOp!"-="(alive, 1);
-            }
-            f = next;
+        sched.queue.event.waitAndReset();
+        for(;;) {
+            FiberExt f = sched.queue.drain();
+            if (f is null) break; // drained an empty queue, time to sleep
+            do {
+                auto next = f.next; //save next, it will be reused on scheduling
+                currentFiber = f;
+                logf("Fiber %x started", cast(void*)f);
+                try {
+                    f.call();
+                }
+                catch (Exception e) {
+                    stderr.writeln(e);
+                    atomicOp!"-="(alive, 1);
+                }
+                if (f.state == FiberExt.State.TERM) {
+                    logf("Fiber %s terminated", cast(void*)f);
+                    atomicOp!"-="(alive, 1);
+                }
+                f = next;
+            } while(f !is null);
         }
     }
+    termination.trigger();
 }
 
 void spawn(void delegate() func) {
@@ -649,7 +658,7 @@ void spawn(void delegate() func) {
     f.schedule();
 }
 
-shared DescriptorState[] descriptors;
+shared Descriptor[] descriptors;
 shared int event_loop_fd;
 shared int signal_loop_fd;
 
@@ -668,7 +677,7 @@ enum WriterState: uint {
 }
 
 // list of awaiting fibers
-shared struct DescriptorState {
+shared struct Descriptor {
     ReaderState _readerState;   
     FiberExt _readerWaits;
     WriterState _writerState;
@@ -743,14 +752,18 @@ nothrow:
     }
 }
 
+enum Fcntl { no, yes }
+
 // intercept - a filter for file descriptor, changes flags and register on first use
-void interceptFd(int fd) nothrow {
+void interceptFd(Fcntl needsFcntl)(int fd) nothrow {
     logf("Hit interceptFD");
     if (fd < 0 || fd >= descriptors.length) return;
-    if (!descriptors[fd].intercepted) {
+    if (cas(&descriptors[fd].intercepted, false, true)) {
         logf("First use, registering fd = %d", fd);
-        int flags = fcntl(fd, F_GETFL, 0);
-        fcntl(fd, F_SETFL, flags | O_NONBLOCK).checked;
+        static if(needsFcntl == Fcntl.yes) {
+            int flags = fcntl(fd, F_GETFL, 0);
+            fcntl(fd, F_SETFL, flags | O_NONBLOCK).checked;
+        }
         epoll_event event;
         event.events = EPOLLIN | EPOLLOUT | EPOLLET;
         event.data.fd = fd;
@@ -770,25 +783,6 @@ void interceptFd(int fd) nothrow {
     }
 }
 
-void interceptFdNoFcntl(int fd) nothrow {
-    logf("Hit interceptFdNoFcntl");
-    if (fd < 0 || fd >= descriptors.length) return;
-    if (cas(&descriptors[fd].intercepted, false, true)) {
-        logf("First use, registering fd = %d", fd);
-        epoll_event event;
-        event.events = EPOLLIN | EPOLLOUT | EPOLLET;
-        event.data.fd = fd;
-        if (epoll_ctl(event_loop_fd, EPOLL_CTL_ADD, fd, &event) < 0 && errno == EPERM) {
-            logf("Detected real file FD, switching from epoll to aio");
-            descriptors[fd].isSocket = false;
-        }
-        else {
-            logf("isSocket = true");
-            descriptors[fd].isSocket = true;
-        }
-    }
-}
-
 void deregisterFd(int fd) nothrow {
     if(fd >= 0 && fd < descriptors.length) {
         auto descriptor = descriptors.ptr + fd;
@@ -800,15 +794,31 @@ void deregisterFd(int fd) nothrow {
     }
 }
 
+extern(C) void graceful_shutdown_on_signal(int, siginfo_t*, void*)
+{
+    termination.trigger();
+    version(photon_tracing) printStats();
+    _exit(9);
+}
+
+version(photon_tracing) 
+void printStats()
+{
+    // TODO: report on various events in eventloop/scheduler
+    string msg = "Tracing report:\n\n";
+    write(2, msg.ptr, msg.length);
+}
+
 void startloop()
 {
     import core.cpuid;
     uint threads = threadsPerCPU;
+
     event_loop_fd = cast(int)epoll_create1(0).checked("ERROR: Failed to create event-loop!");
     // use RT signals, disable default termination on signal received
     sigset_t mask;
     sigemptyset(&mask);
-    sigaddset (&mask, SIGNAL);
+    sigaddset(&mask, SIGNAL);
     pthread_sigmask(SIG_BLOCK, &mask, null).checked;
     signal_loop_fd = cast(int)signalfd(-1, &mask, 0).checked("ERROR: Failed to create signalfd!");
 
@@ -817,17 +827,35 @@ void startloop()
     event.data.fd = signal_loop_fd;
     epoll_ctl(event_loop_fd, EPOLL_CTL_ADD, signal_loop_fd, &event).checked;
 
+    termination = Event(0);
+    event.events = EPOLLIN;
+    event.data.fd = termination.fd;
+    epoll_ctl(event_loop_fd, EPOLL_CTL_ADD, termination.fd, &event).checked;
+
+    {
+        
+        sigaction_t action;
+        action.sa_sigaction = &graceful_shutdown_on_signal;
+        sigaction(SIGTERM, &action, null).checked;
+    }
+
     ssize_t fdMax = sysconf(_SC_OPEN_MAX).checked;
-    descriptors = (cast(shared(DescriptorState*)) mmap(null, fdMax * DescriptorState.sizeof, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0))[0..fdMax];
+    descriptors = (cast(shared(Descriptor*)) mmap(null, fdMax * Descriptor.sizeof, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0))[0..fdMax];
     timerFdPool = new shared ObjectPool!TimerFD;
     scheds = new SchedulerBlock[threads];
     foreach(ref sched; scheds) {
         sched.queue = IntrusiveQueue!(FiberExt, Event)(Event(0));
     }
-    new Thread(&processEvents).start();
+    eventLoop = pthread_create(cast(pthread_t*)&eventLoop, null, &processEventsEntry, null);
 }
 
-void processEvents()
+void stoploop()
+{
+    void* ret;
+    pthread_join(eventLoop, &ret);
+}
+
+extern(C) void* processEventsEntry(void*)
 {
     for (;;) {
         epoll_event[MAX_EVENTS] events = void;
@@ -839,7 +867,11 @@ void processEvents()
         checked(r);
         for (int n = 0; n < r; n++) {
             int fd = events[n].data.fd;
-            if (fd == signal_loop_fd) {
+            if (fd == termination.fd) {
+                foreach(ref s; scheds) s.queue.event.trigger();
+                return null;
+            }
+            else if (fd == signal_loop_fd) {
                 logf("Intercepted our aio SIGNAL");
                 ssize_t r2 = sys_read(signal_loop_fd, &fdsi, fdsi.sizeof);
                 logf("aio events = %d", r2 / signalfd_siginfo.sizeof);
