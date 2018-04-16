@@ -39,7 +39,7 @@ libdfio.so: dfio.d dfio_win.d dfio_linux.d BlockingQueue.o ObjectPool.o
 	cp libdfio.so tests/
 
 http-parser:
-	cd ../http-parser.d && git submodule update --init && make
+	cd ../3rd-party/http-parser && git submodule update --init && make library
 
 curl: libdfio.so
 	$(MAKE) -C bench curl
@@ -110,5 +110,5 @@ test-echo_sever: build-tests http-parser
 clean:
 	$(MAKE) -C tests clean
 	$(MAKE) -C bench clean
-	$(MAKE) -C ../http-parser.d clean
+	$(MAKE) -C ../3rd-party/http-parser clean
 	rm -f *.o *.so main
