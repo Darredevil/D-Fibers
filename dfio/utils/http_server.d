@@ -16,6 +16,10 @@ struct HttpRequest {
 struct Index {
 	size_t start, end;
 
+	void update(ubyte* base, ubyte[] chunk)
+	{
+		
+	}
 }
 
 abstract class SimpleHttpProcessor {
@@ -28,10 +32,10 @@ private:
 	size_t header; // current header
 	Index url; // indices for start/end of URL
 	bool completed;
+	alias Parser = HttpParser!SimpleHttpProcessor;
+ 	Parser parser;
 
-	HttpParser!SimpleHttpProcessor parser;
-
-	void compact()
+	final void compact()
 	{
 		assert(received >= parsed);
 		size_t tail = received - parsed;
@@ -42,15 +46,25 @@ private:
 
 package:
 
-
-	void onBeginMessage()
+	final int onBeginMessage(Parser* parser)
 	{
-		request = HttpRequest.init;
+		completed = false;
+		return 0;
 	}
 
-	void onCompleteMessage()
+	final void onHeaderField(Parser* parser, const(ubyte)[] chunk)
 	{
-		
+
+	}
+
+	final void onHeaderValue(Parser* parser, const(ubyte)[] chunk)
+	{
+
+	}
+
+	final void onCompleteMessage()
+	{
+		HttpRequest()
 	}
 
 public:

@@ -40,9 +40,9 @@ libdfio.so: dfio.d dfio_win.d dfio_linux.d BlockingQueue.o ObjectPool.o
 
 http-parser:
 	cd ../3rd-party/http-parser && git submodule update --init && make library
-	$(CC) -O2 utils/http-parser/http.c -o utils/http-parser/http.o
-	$(DC) $(DFLAGS) -c utils/http-parser/http_parser.d
-	$(DC) -lib -o utils/http-utils.lib  utils/http-parser/http_parser.o utils/http.o ../3rd-part/http-parser/libhttp_parser.o
+	$(CC) -I../3rd-party/http-parser -O2 utils/http.c -c -o utils/http.o
+	$(DC) $(DFLAGS) -c utils/http_parser.d
+	$(DC) -lib -ofutils/http-utils.a  utils/http_parser.o utils/http.o ../3rd-party/http-parser/libhttp_parser.o
 
 curl: libdfio.so
 	$(MAKE) -C bench curl

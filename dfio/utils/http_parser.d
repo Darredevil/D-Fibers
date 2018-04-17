@@ -1,6 +1,6 @@
 /// Minimalistic low-overhead wrapper for nodejs/http-parser
 /// Used for benchmarks with simple server
-module utils.http;
+module utils.http_parser;
 private:
 
 import std.range.primitives;
@@ -283,7 +283,7 @@ unittest
 	auto tests = [
 		TestCase(
 			HttpParserType.request, 
-			"GET /test HTTP/1.1\r\n" ~
+			 "GET /test HTTP/1.1\r\n" ~
 	         "User-Agent: curl/7.18.0 (i486-pc-linux-gnu) libcurl/7.18.0 OpenSSL/0.9.8g zlib/1.2.3.3 libidn/1.1\r\n" ~
 	         "Host: 0.0.0.0=5000\r\n" ~
 	         "Accept: */*\r\n" ~
