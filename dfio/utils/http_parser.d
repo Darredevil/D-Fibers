@@ -182,6 +182,7 @@ struct HttpParser(Interceptor)
 				extern(C) static int %1$s(http_parser* p) {
 					auto parser = cast(HttpParser*)p;
 					try {
+						parser.flags = http_parser_flags(p);
 						return parser.interceptor.%2$s(parser);
 					}
 					catch (Throwable t) {
@@ -203,6 +204,7 @@ struct HttpParser(Interceptor)
 				extern(C) static int %1$s(http_parser* p, const ubyte* at, size_t size) {
 					auto parser = cast(HttpParser*)p;
 					try {
+						parser.flags = http_parser_flags(p);
 						return parser.interceptor.%2$s(parser, at[0..size]);
 					}
 					catch (Throwable t) {
@@ -220,7 +222,9 @@ struct HttpParser(Interceptor)
 public:
 	alias interceptor this;
 
-	@property uint status() pure @safe nothrow  { return flags & 0xffff; }	
+	@property uint status() pure @safe nothrow  { return flags & 0xffff; }
+
+	@property HttpMethod method() pure @safe nothrow  { return cast(HttpMethod)((flags >> 16) & 0xFF); }
 
 	this(Interceptor interceptor, HttpParserType type)
 	{
@@ -229,7 +233,7 @@ public:
 		mixin(generateCallback("on_message_begin", "onMessageBegin"));
 		mixin(generateCallbackWithData("on_url", "onUrl"));
 		mixin(generateCallbackWithData("on_status", "onStatus"));
-		mixin(generateCallbackWithData("on_status", "onStatus"));
+		mixin(generateCallbackWithData("on_body", "onBody"));
 		mixin(generateCallbackWithData("on_header_field", "onHeaderField"));
 		mixin(generateCallbackWithData("on_header_value", "onHeaderValue"));
 		mixin(generateCallback("on_headers_complete", "onHeadersComplete"));
@@ -274,6 +278,7 @@ unittest
 		HttpParserType type;
 		string raw;
 		string url;
+		string _body;
 		bool shouldKeepAlive;
 		ushort major;
 		ushort minor;
@@ -282,18 +287,21 @@ unittest
 
 	auto tests = [
 		TestCase(
-			HttpParserType.request, 
+			HttpParserType.request,
 			 "GET /test HTTP/1.1\r\n" ~
 	         "User-Agent: curl/7.18.0 (i486-pc-linux-gnu) libcurl/7.18.0 OpenSSL/0.9.8g zlib/1.2.3.3 libidn/1.1\r\n" ~
 	         "Host: 0.0.0.0=5000\r\n" ~
 	         "Accept: */*\r\n" ~
-	         "\r\n",
+	         "Content-Length: 2\r\n" ~
+	         "\r\n42",
 	         "/test",
+	         "42",
 	         true, 1, 1,
 			 [
 			 	[ "User-Agent", "curl/7.18.0 (i486-pc-linux-gnu) libcurl/7.18.0 OpenSSL/0.9.8g zlib/1.2.3.3 libidn/1.1" ],
 			 	[ "Host", "0.0.0.0=5000" ],
-			 	[ "Accept", "*/*" ]
+			 	[ "Accept", "*/*" ],
+			 	[ "Content-Length", "2"]
 		     ]
          )
 	];
@@ -305,10 +313,13 @@ unittest
 		string url;
 		string[] headerFields;
 		string[] headerValues;
+		string _body;
+		bool headersCompleted = false;
 
 		int onMessageBegin(HttpParser!Callbacks* parser) {
 			headerValues = [];
 			headerFields = [];
+			headersCompleted = false;
 			url = "";
 			return 0;
 		}
@@ -328,15 +339,39 @@ unittest
 			return 0;
 		}
 
-		int onMessageComplete(HttpParser!Callbacks* parser) {
-			auto test = tests[testCase++];
+		int onBody(HttpParser!Callbacks* parser, const(ubyte)[] chunk) {
+			_body = cast(string)chunk;
+			return 0;
+		}
+
+		int onStatus(HttpParser!Callbacks* parser, const(ubyte)[] chunk) { return 0; }
+
+		int onHeadersComplete(HttpParser!Callbacks* parser) {
+			auto test = tests[testCase];
 			assert(test.url == url);
 			assert(test.major == parser.httpMajor);
 			assert(test.minor == parser.httpMinor);
 			foreach(i, header; test.headers) {
-				assert(headerFields[i] == header[0], 
+				assert(headerFields[i] == header[0],
 					text("header field mismatch got `", headerFields[i], "` expected `", header[0], "`"));
-				assert(headerValues[i] == header[1], 
+				assert(headerValues[i] == header[1],
+					text("header value mismatch got `", headerValues[i], "` expected `", header[1], "`"));
+			}
+			headersCompleted = true;
+			return 0;
+		}
+
+		int onMessageComplete(HttpParser!Callbacks* parser) {
+			auto test = tests[testCase++];
+			assert(headersCompleted);
+			assert(test.url == url);
+			assert(test.major == parser.httpMajor);
+			assert(test.minor == parser.httpMinor);
+			assert(test._body == _body);
+			foreach(i, header; test.headers) {
+				assert(headerFields[i] == header[0],
+					text("header field mismatch got `", headerFields[i], "` expected `", header[0], "`"));
+				assert(headerValues[i] == header[1],
 					text("header value mismatch got `", headerValues[i], "` expected `", header[1], "`"));
 			}
 			return 0;
