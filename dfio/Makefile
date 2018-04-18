@@ -14,7 +14,7 @@ simple-bench: libdfio.so utils/libhttp-utils.a
 
 simple-bench-ldc: DC=ldmd2
 simple-bench-ldc: DFLAGS=-O3 -O4 -O5 -release -link-defaultlib-shared
-simple-bench-ldc: libdfio.so http-parser
+simple-bench-ldc: libdfio.so utils/libhttp-utils.a
 	$(MAKE) -C bench simple-bench-ldc
 
 simple-bench-go:
