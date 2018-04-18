@@ -86,9 +86,9 @@ public:
         client.send(outBuf.data); // TODO: short-writes are quite possible
 	}
 
-	void onStart(HttpRequest req);
+	void onStart(HttpRequest req) {}
 
-	void onChunk(HttpRequest req, const(ubyte)[] chunk);
+	void onChunk(HttpRequest req, const(ubyte)[] chunk) {}
 
 	void onComplete(HttpRequest req);
 
@@ -101,8 +101,6 @@ public:
 		state = State.url;
 		return 0;
 	}
-
-	final int onStatus(Parser* parser, const(ubyte)[] chunk) {  return 0; }
 
 	final int onUrl(Parser* parser, const(ubyte)[] chunk)
 	{

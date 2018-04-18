@@ -31,7 +31,7 @@ server-dlang: server/server.d
 
 hello-dlang: static_http/hello.d
 	$(DC) $(DFLAGS) -I.. -c static_http/hello.d -I../../http-parser.d/out/di ../../http-parser.d/out/http-parser.a
-	$(DC) $(DFLAGS) hello.o ../../http-parser.d/out/*.o  -L=../libdfio.so -L-rpath=.:../ -ofhello-dlang
+	$(DC) $(DFLAGS) hello.o ../utils/libhttp-utils.a  -L=../libdfio.so -L-rpath=.:../ -ofhello-dlang
 
 hello-golang: static_http/hello.go
 	go build -o hello-golang $<
