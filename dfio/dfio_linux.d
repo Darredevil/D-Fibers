@@ -162,7 +162,7 @@ version (X86) {
     {
         int ret;
 
-        synchronized asm
+        asm nothrow
         {
             mov EAX, ident;
             mov EBX, n[EBP];
@@ -178,7 +178,7 @@ version (X86) {
     {
         int ret;
 
-        asm
+        asm nothrow
         {
             mov EAX, ident;
             mov EBX, n[EBP];
@@ -195,7 +195,7 @@ version (X86) {
     {
         int ret;
 
-        asm
+        asm nothrow
         {
             mov EAX, ident;
             mov EBX, n[EBP];
@@ -226,7 +226,7 @@ version (X86) {
     {
         size_t ret;
 
-        asm
+        asm nothrow
         {
             mov RAX, ident;
             syscall;
@@ -239,7 +239,7 @@ version (X86) {
     {
         size_t ret;
 
-        asm
+        asm nothrow
         {
             mov RAX, ident;
             mov RDI, n;
@@ -253,7 +253,7 @@ version (X86) {
     {
         size_t ret;
 
-        asm
+        asm nothrow
         {
             mov RAX, ident;
             mov RDI, n;
@@ -269,7 +269,7 @@ version (X86) {
     {
         size_t ret;
 
-        asm
+        asm nothrow
         {
             mov RAX, ident;
             mov RDI, n;
@@ -286,7 +286,7 @@ version (X86) {
     {
         size_t ret;
 
-        asm
+        asm nothrow
         {
             mov RAX, ident;
             mov RDI, n;
@@ -304,7 +304,7 @@ version (X86) {
     {
         size_t ret;
 
-        asm
+        asm nothrow
         {
             mov RAX, ident;
             mov RDI, n;
@@ -322,147 +322,39 @@ version (X86) {
 
 extern(C) private ssize_t read(int fd, void *buf, size_t count) nothrow
 {
-//    if (currentFiber is null) {
-        logf("READ PASSTHROUGH!");
-        return syscall(SYS_READ, fd, cast(ssize_t) buf, cast(ssize_t) count).withErrorno;
-/*    }
-    else {
-        logf("HOOKED READ WITH MY LIB fd=%d!", fd); // TODO: temporary for easy check, remove later
-        interceptFd(fd);
-        if(descriptors[fd].isSocket) { // socket
-            for(;;) {
-                ssize_t resp = syscall(SYS_READ, fd, cast(ssize_t) buf, cast(ssize_t) count);
-                if (resp == -EWOULDBLOCK || resp == -EAGAIN) {
-                    logf("READ GOT DELAYED - FD %d, resp = %d", fd, resp);
-                    reschedule(fd, currentFiber, EPOLLIN);
-                    continue;
-                }
-                else
-                    return withErrorno(resp);
-            }
-        } else { // file
-            aiocb myaiocb;
-            myaiocb.aio_fildes = fd;
-            myaiocb.aio_buf = buf;
-            myaiocb.aio_nbytes = count;
-            myaiocb.aio_sigevent.sigev_notify = SIGEV_SIGNAL;
-            myaiocb.aio_sigevent.sigev_signo = SIGNAL;
-            //myaiocb.aio_sigevent.sigev_value = cast(sigval)fd;
-            sigval tmp;
-            tmp.sival_ptr = cast(void*)currentFiber;
-            myaiocb.aio_sigevent.sigev_value = tmp;
-            ssize_t r = aio_read(&myaiocb).checked;
-            //reschedule(fd, currentFiber, EPOLLIN);
-            currentFiber.yield();
-            logf("aio_read resp = %d", r);
-            ssize_t resp = aio_return(&myaiocb);
-            return resp;
-        }
-        assert(0);
-    }*/
+    return universalSyscall!(SYS_READ, "READ", SyscallKind.read, Fcntl.yes, EWOULDBLOCK)
+        (fd, cast(size_t)buf, count);
 }
 
 extern(C) private ssize_t write(int fd, const void *buf, size_t count)
 {
-//    if (currentFiber is null) {
-        logf("WRITE PASSTHROUGH!");
-        return syscall(SYS_WRITE, fd, cast(size_t) buf, count).withErrorno;
-/+    }
-    else {
-        logf("HOOKED WRITE FD=%d!", fd);
-        interceptFd(fd);
-        if(descriptors[fd].isSocket) { // socket
-            logf("Socket path");
-            for(;;) {
-                ssize_t resp = syscall(SYS_WRITE, fd, cast(ssize_t) buf, cast(ssize_t) count);
-                if (resp == -EWOULDBLOCK || resp == -EAGAIN) {
-                    logf("WRITE GOT DELAYED - FD %d, resp = %d", fd, resp);
-                    reschedule(fd, currentFiber, EPOLLOUT/* | EPOLLIN*/);
-                    continue;
-                }
-                else
-                    return withErrorno(resp);
-            }
-        } else { // file
-            logf("File path");
-            aiocb myaiocb;
-            myaiocb.aio_fildes = fd;
-            myaiocb.aio_buf = cast(void*)buf;
-            myaiocb.aio_nbytes = count;
-            myaiocb.aio_sigevent.sigev_notify = SIGEV_SIGNAL;
-            myaiocb.aio_sigevent.sigev_signo = SIGNAL;
-            //myaiocb.aio_sigevent.sigev_value = cast(sigval)fd;
-            sigval tmp;
-            tmp.sival_ptr = cast(void*)currentFiber;
-            myaiocb.aio_sigevent.sigev_value = tmp;
-            //myaiocb.aio_sigevent.sigev_value = cast(sigval)(cast(void*)currentFiber);
-            ssize_t r = aio_write(&myaiocb).checked;
-            //reschedule(fd, currentFiber, EPOLLOUT/* | EPOLLIN*/);
-            currentFiber.yield();
-            logf("aio_write resp = %d", r);
-            ssize_t resp = aio_return(&myaiocb);
-            return resp;
-        }
-        assert(0);
-    }+/
+    return universalSyscall!(SYS_WRITE, "WRITE", SyscallKind.write, Fcntl.yes, EWOULDBLOCK)
+        (fd, cast(size_t)buf, count);
 }
 
 extern(C) private ssize_t accept(int sockfd, sockaddr *addr, socklen_t *addrlen)
 {
-    return acceptSyscall!("accept", SYS_ACCEPT, EWOULDBLOCK)(sockfd, cast(size_t) addr, cast(size_t) addrlen);    
+    return universalSyscall!(SYS_ACCEPT, "accept", SyscallKind.accept, Fcntl.yes, EWOULDBLOCK)
+        (sockfd, cast(size_t) addr, cast(size_t) addrlen);    
 }
 
 extern(C) private ssize_t accept4(int sockfd, sockaddr *addr, socklen_t *addrlen, int flags)
 {
-    return acceptSyscall!("accept4", SYS_ACCEPT4, EWOULDBLOCK)(sockfd, cast(size_t) addr, cast(size_t) addrlen, flags);
+    return universalSyscall!(SYS_ACCEPT4, "accept4", SyscallKind.accept, Fcntl.yes, EWOULDBLOCK)
+        (sockfd, cast(size_t) addr, cast(size_t) addrlen, flags);
 }
 
-extern(C) private int connect(int sockfd, const sockaddr *addr, socklen_t *addrlen)
+extern(C) private ssize_t connect(int sockfd, const sockaddr *addr, socklen_t *addrlen)
 {
-    //if (currentFiber is null) {
-        logf("CONNECT PASSTHROUGH!");
-        return cast(int)syscall(SYS_CONNECT, sockfd, cast(size_t) addr, cast(size_t) addrlen).withErrorno;
-    /*}
-    else {
-        logf("HOOKED CONNECT WITH MY LIB!"); // TODO: temporary for easy check, remove later
-        interceptFd(sockfd);
-        for(;;) {
-            ssize_t resp = syscall(SYS_CONNECT, sockfd, cast(size_t) addr, cast(size_t) addrlen);
-            if (resp == -EINPROGRESS || resp == -EAGAIN) {
-                logf("CONNECT GOT DELAYED - sockfd %d, resp = %d", sockfd, resp);
-                reschedule(sockfd, currentFiber, EPOLLIN);
-                continue;
-            }
-            else
-                return cast(int)withErrorno(resp);
-        }
-        assert(0);
-    }*/
+    return universalSyscall!(SYS_CONNECT, "connect", SyscallKind.accept, Fcntl.yes, EINPROGRESS)
+        (sockfd, cast(size_t) addr, cast(size_t) addrlen);
 }
 
 extern(C) private ssize_t sendto(int sockfd, const void *buf, size_t len, int flags,
                       const sockaddr *dest_addr, socklen_t addrlen)
 {
-    //if (currentFiber is null) {
-        logf("SENDTO PASSTHROUGH!");
-        return cast(int)syscall(SYS_SENDTO, sockfd, cast(size_t) dest_addr, cast(size_t) addrlen).withErrorno;
-    /*}
-    else {
-        logf("HOOKED SENDTO WITH MY LIB!"); // TODO: temporary for easy check, remove later
-        interceptFdNoFcntl(sockfd);
-        for(;;) {
-            ssize_t resp = syscall(SYS_SENDTO, sockfd, cast(size_t) buf, len, MSG_DONTWAIT | flags,
-                cast(size_t) dest_addr, addrlen);
-            if (resp == -EWOULDBLOCK || resp == -EAGAIN) {
-                logf("SENDTO GOT DELAYED - sockfd %d, resp = %d", sockfd, resp);
-                reschedule(sockfd, currentFiber, EPOLLIN);
-                continue;
-            }
-            else
-                return withErrorno(resp);
-        }
-        assert(0);
-    }*/
+    return universalSyscall!(SYS_SENDTO, "sendto", SyscallKind.read, Fcntl.no, EWOULDBLOCK)
+        (sockfd, cast(size_t) buf, len, flags, cast(size_t) dest_addr, cast(size_t) addrlen);
 }
 
 extern(C) private ssize_t recv(int sockfd, void *buf, size_t len, int flags) nothrow {
@@ -474,85 +366,92 @@ extern(C) private ssize_t recv(int sockfd, void *buf, size_t len, int flags) not
     return recvfrom(sockfd, buf, len, flags, cast(sockaddr*)&src_addr, &addrlen);   
 }
 
-ssize_t readishSyscallBuffered(string name, size_t ident, ssize_t ERR, T...)(int fd, size_t buf, size_t len, T args) nothrow {
+ssize_t universalSyscall(size_t ident, string name, SyscallKind kind, Fcntl needsFcntl, ssize_t ERR, T...)
+                        (int fd, T args) nothrow {
     if (currentFiber is null) {
         logf("%s PASSTHROUGH FD=%s", name, fd);
-        return cast(int)syscall(ident, fd, buf, len, args).withErrorno;
+        return syscall(ident, fd, args).withErrorno;
     }
     else {
         logf("HOOKED %s FD=%d", name, fd);
-        interceptFd!(Fcntl.no)(fd);
+        interceptFd!(needsFcntl)(fd);
         shared(Descriptor)* descriptor = descriptors.ptr + fd;
     L_start:
-        auto state = descriptor.readerState;
-        logf("%s syscall state is %d", name, state);
-        final switch (state) with (ReaderState) {
-        case EMPTY:
-            auto head = descriptor.readWaiters;
-            if (!descriptor.enqueueReader(head, cast(shared)currentFiber)) goto L_start;
-            // changed state to e.g. READY or UNCERTAIN in meantime, may need to reschedule
-            if (descriptor.readerState != EMPTY) descriptor.scheduleReaders();
-            FiberExt.yield();
-            goto L_start;
-        case UNCERTAIN:
-            descriptor.changeReader(UNCERTAIN, READING); // may became READY or READING
-            goto case READING;
-        case READY:
-            descriptor.changeReader(READY, READING); // always succeeds if 1 fiber reads
-            goto case READING;
-        case READING:
-            ssize_t resp = syscall(ident, fd, buf, len, args);
-            if (resp == len)
-                descriptor.changeReader(READING, UNCERTAIN);
-            else if(resp >= 0)
-                descriptor.changeReader(READING, EMPTY);
-            else if (resp == -ERR || resp == -EAGAIN) {
-                if (descriptor.changeReader(READING, EMPTY))
-                    goto case EMPTY;
-                goto L_start; // became UNCERTAIN or READY in meantime
+        static if(kind == SyscallKind.accept || kind == SyscallKind.read) {
+            auto state = descriptor.readerState;
+            logf("%s syscall state is %d", name, state);
+            final switch (state) with (ReaderState) {
+            case EMPTY:
+                auto head = descriptor.readWaiters;
+                if (!descriptor.enqueueReader(head, cast(shared)currentFiber)) goto L_start;
+                // changed state to e.g. READY or UNCERTAIN in meantime, may need to reschedule
+                if (descriptor.readerState != EMPTY) descriptor.scheduleReaders();
+                FiberExt.yield();
+                goto L_start;
+            case UNCERTAIN:
+                descriptor.changeReader(UNCERTAIN, READING); // may became READY or READING
+                goto case READING;
+            case READY:
+                descriptor.changeReader(READY, READING); // always succeeds if 1 fiber reads
+                goto case READING;
+            case READING:
+                ssize_t resp = syscall(ident, fd, args);
+                static if (kind == SyscallKind.accept) {
+                    if (resp >= 0) // for accept we never know if we emptied the queue
+                        descriptor.changeReader(READING, UNCERTAIN);
+                    else if (resp == -ERR || resp == -EAGAIN) {
+                        if (descriptor.changeReader(READING, EMPTY))
+                            goto case EMPTY;
+                        goto L_start; // became UNCERTAIN or READY in meantime
+                    }
+                }
+                else static if (kind == SyscallKind.read) {
+                    if (resp == args[1]) // length is 2nd in (buf, length, ...)
+                        descriptor.changeReader(READING, UNCERTAIN);
+                    else if(resp >= 0)
+                        descriptor.changeReader(READING, EMPTY);
+                    else if (resp == -ERR || resp == -EAGAIN) {
+                        if (descriptor.changeReader(READING, EMPTY))
+                            goto case EMPTY;
+                        goto L_start; // became UNCERTAIN or READY in meantime
+                    }
+                }
+                else
+                    static assert(0);
+                return withErrorno(resp);
             }
-            return withErrorno(resp);
         }
-        assert(0);
-    }
-}
-
-ssize_t acceptSyscall(string name, size_t ident, ssize_t ERR, T...)(int fd, T args){
-    if (currentFiber is null) {
-        logf("%s PASSTHROUGH FD=%s", name, fd);
-        return cast(int)syscall(ident, fd, args).withErrorno;
-    }
-    else {
-        logf("HOOKED %s FD=%d", name, fd);
-        interceptFd!(Fcntl.yes)(fd);
-        shared(Descriptor)* descriptor = descriptors.ptr + fd;
-    L_start:
-        auto state = descriptor.readerState;
-        logf("%s syscall state is %d", name, state);
-        final switch (state) with (ReaderState) {
-        case EMPTY:
-            auto head = descriptor.readWaiters;
-            if (!descriptor.enqueueReader(head, cast(shared)currentFiber)) goto L_start;
-            // changed state to e.g. READY or UNCERTAIN in meantime, may need to reschedule
-            if (descriptor.readerState != EMPTY) descriptor.scheduleReaders();
-            FiberExt.yield();
-            goto L_start;
-        case UNCERTAIN:
-            descriptor.changeReader(UNCERTAIN, READING); // may became READY or READING
-            goto case READING;
-        case READY:
-            descriptor.changeReader(READY, READING); // always succeeds if 1 fiber reads
-            goto case READING;
-        case READING:
-            ssize_t resp = syscall(ident, fd, args);
-            if (resp >= 0) // for accept we never know if we emptied the queue
-                descriptor.changeReader(READING, UNCERTAIN);
-            else if (resp == -ERR || resp == -EAGAIN) {
-                if (descriptor.changeReader(READING, EMPTY))
-                    goto case EMPTY;
-                goto L_start; // became UNCERTAIN or READY in meantime
+        else static if(kind == SyscallKind.write) {
+            //TODO: Handle short-write b/c of EWOULDBLOCK to apear as fully blocking
+            auto state = descriptor.writerState;
+            logf("%s syscall state is %d", name, state);
+            final switch (state) with (WriterState) {
+            case FULL:
+                auto head = descriptor.writeWaiters;
+                if (!descriptor.enqueueReader(head, cast(shared)currentFiber)) goto L_start;
+                // changed state to e.g. READY or UNCERTAIN in meantime, may need to reschedule
+                if (descriptor.writerState != FULL) descriptor.scheduleWriters();
+                FiberExt.yield();
+                goto L_start;
+            case UNCERTAIN:
+                descriptor.changeWriter(UNCERTAIN, WRITING); // may became READY or WRITING
+                goto case WRITING;
+            case READY:
+                descriptor.changeWriter(READY, WRITING); // always succeeds if 1 fiber writes
+                goto case WRITING;
+            case WRITING:
+                ssize_t resp = syscall(ident, fd, args);
+                if (resp == args[1]) // (buf, len) args to syscall
+                    descriptor.changeWriter(WRITING, UNCERTAIN);
+                else if(resp >= 0)
+                    descriptor.changeWriter(WRITING, FULL);
+                else if (resp == -ERR || resp == -EAGAIN) {
+                    if (descriptor.changeWriter(WRITING, FULL))
+                        goto case FULL;
+                    goto L_start; // became UNCERTAIN or READY in meantime
+                }
+                return withErrorno(resp);
             }
-            return withErrorno(resp);
         }
         assert(0);
     }
@@ -561,8 +460,8 @@ ssize_t acceptSyscall(string name, size_t ident, ssize_t ERR, T...)(int fd, T ar
 extern(C) private ssize_t recvfrom(int sockfd, void *buf, size_t len, int flags,
                         sockaddr *src_addr, ssize_t* addrlen) nothrow
 {
-    return readishSyscallBuffered!("RECVFROM", SYS_RECVFROM, EWOULDBLOCK)(sockfd, 
-        cast(size_t)buf, len, flags, cast(size_t)src_addr, cast(size_t)addrlen);
+    return universalSyscall!(SYS_RECVFROM, "RECVFROM", SyscallKind.read, Fcntl.no, EWOULDBLOCK)
+        (sockfd, cast(size_t)buf, len, flags, cast(size_t)src_addr, cast(size_t)addrlen);
 }
 
 extern(C) private ssize_t close(int fd) nothrow
@@ -674,7 +573,7 @@ enum WriterState: uint {
     READY = 0,
     UNCERTAIN = 1,
     WRITING = 2,
-    EMPTY = 3
+    FULL = 3
 }
 
 // list of awaiting fibers
@@ -754,6 +653,7 @@ nothrow:
 }
 
 enum Fcntl { no, yes }
+enum SyscallKind { accept, read, write }
 
 // intercept - a filter for file descriptor, changes flags and register on first use
 void interceptFd(Fcntl needsFcntl)(int fd) nothrow {
@@ -913,7 +813,26 @@ extern(C) void* processEventsEntry(void*)
                     logf("Awaits %x", cast(void*)descriptor.readWaiters);
                 }
                 if (events[n].events & EPOLLOUT) {
-                    //TODO: ...
+                    auto state = descriptor.writerState;
+                    logf("state = %d", state);
+                    final switch(state) with(WriterState) { 
+                        case FULL:
+                            descriptor.changeWriter(FULL, READY);
+                            descriptor.scheduleWriters();
+                            break;
+                        case UNCERTAIN:
+                            descriptor.changeWriter(UNCERTAIN, READY);
+                            break;
+                        case WRITING:
+                            if (!descriptor.changeWriter(WRITING, UNCERTAIN)) {
+                                if (descriptor.changeWriter(FULL, UNCERTAIN)) // if became empty - move to UNCERTAIN and wake writers
+                                    descriptor.scheduleWriters();
+                            }
+                            break;
+                        case READY:
+                            break;
+                    }
+                    logf("Awaits %x", cast(void*)descriptor.writeWaiters);
                 }
             }
         }
