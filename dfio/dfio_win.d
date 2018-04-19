@@ -222,22 +222,6 @@ void spawn(void delegate() func)
     atomicOp!"+="(activeThreads, 1);
 }
 
-void runFibers()
-{
-    Thread runThread(size_t n){ // damned D lexical capture "semantics"
-        auto t = new Thread(() => schedulerEntry(n));
-        t.start();
-        return t; 
-    }
-    Thread[] threads = new Thread[scheds.length-1];
-    foreach (i; 0..threads.length){
-        threads[i] = runThread(i+1);
-    }
-    schedulerEntry(0);
-    foreach (t; threads)
-        t.join();
-}
-
 import std.format;
 
 void outputToConsole(const(wchar)[] msg)
@@ -256,7 +240,6 @@ void logf(T...)(const(wchar)[] fmt, T args)
         outputToConsole("ARGH!"w);
     }
 }
-
 
 void schedulerEntry(size_t n)
 {
