@@ -1,3 +1,3 @@
-[submodule "http-parser.d"]
-	path = http-parser.d
-	url = https://github.com/Darredevil/http-parser.d.git
+[submodule "3rd-party/http-parser"]
+	path = 3rd-party/http-parser
+	url = https://github.com/nodejs/http-parser.git

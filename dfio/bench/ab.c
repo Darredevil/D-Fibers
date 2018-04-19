@@ -1311,23 +1311,6 @@ bad_range:
 
       dump_srv_topology(buf, fo, SERVER_NAME, &process_pid, nbr_pids, pids);
 
-      // try to get the server version ('root' privileges are required for
-      // web servers run under the 'root' account)
-      char srv_path[512];
-      pid_path(process_pid, srv_path, sizeof(srv_path));
-      if(srv_path && *srv_path)
-      {
-         fprintf(stdout, "%s\n", srv_path);
-         fprintf(fo, "%s\n", srv_path);
-         char version[1024];
-         char *v = srv_ver(srv_path, version, sizeof(version));
-         if(v && *v)
-         {
-            fprintf(stdout, "%s\n", v);
-            fprintf(fo, "%s\n", v);
-         }
-      }
-
       // get the start count of CPU jiffies for this server
       res_args_t res_args = {cpu_ram_buf, nbr_pids, pids, beg_cpu};
       th_resources(&res_args);

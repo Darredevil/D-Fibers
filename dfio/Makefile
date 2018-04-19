@@ -6,19 +6,22 @@ export DC
 build-tests: libdfio.so BlockingQueue.o ObjectPool.o http-parser
 	$(MAKE) -C tests
 
-bench: libdfio.so BlockingQueue.o http-parser
+bench: libdfio.so BlockingQueue.o utils/libhttp-utils.a
 	$(MAKE) -C bench
 
-simple-bench: libdfio.so http-parser
+simple-bench: libdfio.so utils/libhttp-utils.a
 	$(MAKE) -C bench simple-bench
 
 simple-bench-ldc: DC=ldmd2
 simple-bench-ldc: DFLAGS=-O3 -O4 -O5 -release -link-defaultlib-shared
-simple-bench-ldc: libdfio.so http-parser
+simple-bench-ldc: libdfio.so utils/libhttp-utils.a
 	$(MAKE) -C bench simple-bench-ldc
 
 simple-bench-go:
 	$(MAKE) -C bench simple-bench-go
+
+simple-bench-fast-go:
+	$(MAKE) -C bench simple-bench-fast-go
 
 simple-bench-js:
 	$(MAKE) -C bench simple-bench-js
@@ -35,8 +38,10 @@ libdfio.so: dfio.d dfio_win.d dfio_linux.d BlockingQueue.o ObjectPool.o
 	$(DC) $(DFLAGS) -L-rpath=dfio -shared -oflibdfio.so dfio.o dfio_linux.o dfio_win.o BlockingQueue.o ObjectPool.o
 	cp libdfio.so tests/
 
-http-parser:
-	cd ../http-parser.d && git submodule update --init && make
+utils/libhttp-utils.a:
+	cd ../3rd-party/http-parser && git submodule update --init && make library
+	$(CC) -I../3rd-party/http-parser -O2 utils/http.c -c -o utils/http.o
+	$(DC) -lib -ofutils/libhttp-utils.a utils/http_parser.d utils/http_server.d utils/http.o ../3rd-party/http-parser/libhttp_parser.o
 
 curl: libdfio.so
 	$(MAKE) -C bench curl
@@ -107,5 +112,5 @@ test-echo_sever: build-tests http-parser
 clean:
 	$(MAKE) -C tests clean
 	$(MAKE) -C bench clean
-	$(MAKE) -C ../http-parser.d clean
+	$(MAKE) -C ../3rd-party/http-parser clean
 	rm -f *.o *.so main
